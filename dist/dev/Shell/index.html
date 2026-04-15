@@ -1,0 +1,331 @@
+<!--
+    Copyright (C) 2022 to the present, Crestron Electronics, Inc.
+    All rights reserved.
+    No part of this software may be reproduced in any form, machine
+    or natural, without the express written consent of Crestron Electronics.
+    Use of this source code is subject to the terms of the Crestron Software License Agreement 
+    under which you licensed this source code.  
+-->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title data-ch5-i18n="-+app.title+-"></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="icon" type="image/x-icon" id="favicon" />
+  <link rel="stylesheet" id="shellTemplateSelectedThemeCss">
+  <link rel="stylesheet" id="externalCss">
+  
+  <!-- Custom Splash Screen Styles -->
+  <style>
+    /* Enhanced Splash Screen - replaces default loader */
+    #custom-splash {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(145deg, #0f172a, #1e2937);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10000;
+      transition: opacity 0.6s ease-out, visibility 0.6s ease-out;
+      font-family: system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    }
+    
+    .splash-content {
+      text-align: center;
+      animation: fadeInUp 0.6s ease-out;
+      padding: 20px;
+    }
+    
+    /* Company Logo Container */
+    .splash-logo-container {
+      margin-bottom: 30px;
+    }
+    
+    .splash-logo {
+      max-width: min(180px, 40vw);
+      max-height: min(120px, 25vh);
+      width: auto;
+      height: auto;
+      animation: gentlePulse 2s ease-in-out infinite;
+    }
+    
+    /* Fallback Logo (if image fails to load) */
+    .splash-logo-fallback {
+      width: min(120px, 30vw);
+      height: min(120px, 30vw);
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+      font-size: 3rem;
+      font-weight: bold;
+      color: white;
+      box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3);
+    }
+    
+    /* Welcome Message */
+    .splash-welcome {
+      color: #94a3b8;
+      font-size: clamp(0.9rem, 4vw, 1.1rem);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    
+    .splash-company {
+      color: #ffffff;
+      font-size: clamp(1.2rem, 6vw, 1.8rem);
+      font-weight: 700;
+      margin-bottom: 30px;
+      background: linear-gradient(135deg, #ffffff, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    /* Enhanced Loading Indicator */
+    .custom-loader {
+      position: relative;
+      width: 60px;
+      height: 60px;
+      margin: 20px auto;
+    }
+    
+    .custom-loader-circle {
+      width: 100%;
+      height: 100%;
+      border: 3px solid rgba(59, 130, 246, 0.2);
+      border-top-color: #3b82f6;
+      border-right-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    .custom-loader-inner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 40px;
+      border: 2px solid rgba(96, 165, 250, 0.2);
+      border-bottom-color: #22d3ee;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite reverse;
+    }
+    
+    .loading-text {
+      color: #94a3b8;
+      font-size: clamp(0.8rem, 3.5vw, 0.9rem);
+      margin-top: 25px;
+      letter-spacing: 1px;
+    }
+    
+    .loading-dots {
+      display: inline-block;
+      width: 20px;
+      text-align: left;
+    }
+    
+    /* Progress Bar */
+    .loading-progress {
+      width: min(250px, 60vw);
+      height: 3px;
+      background: rgba(59, 130, 246, 0.2);
+      border-radius: 3px;
+      margin: 20px auto 0;
+      overflow: hidden;
+    }
+    
+    .loading-progress-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #22d3ee);
+      border-radius: 3px;
+      animation: progressSimulation 2.5s ease-out forwards;
+    }
+    
+    /* Animations */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    @keyframes gentlePulse {
+      0%, 100% { 
+        transform: scale(1);
+        opacity: 1;
+      }
+      50% { 
+        transform: scale(1.02);
+        opacity: 0.95;
+      }
+    }
+    
+    @keyframes progressSimulation {
+      0% { width: 0%; }
+      20% { width: 15%; }
+      50% { width: 45%; }
+      80% { width: 75%; }
+      100% { width: 95%; }
+    }
+    
+    /* Hide splash screen */
+    .splash-hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 600px) {
+      .custom-loader {
+        width: 45px;
+        height: 45px;
+      }
+      .custom-loader-inner {
+        width: 30px;
+        height: 30px;
+      }
+    }
+  </style>
+  
+  
+  <link rel="stylesheet" href="./assets/css/main.26ee0e47ec9e3db7a63b.css?82635d1992a420c7b92b">
+  
+  <link rel="stylesheet" href="./assets/css/templatecomponents.960c170bacfc90e64076.css?82635d1992a420c7b92b">
+  
+  <link rel="stylesheet" href="./assets/css/projectcomponents.8c9613bab6a392c88cab.css?82635d1992a420c7b92b">
+  
+
+</head>
+					
+<body>
+  <div id="widgets-and-standalone-pages">
+  </div>
+  <ch5-import-htmlsnippet id="template-page-import-page"
+    url="./app/template/components/pages/template-page/template-page.html">
+  </ch5-import-htmlsnippet>
+
+  <!-- Custom Splash Screen (replaces default loader) -->
+  <div id="custom-splash">
+    <div class="splash-content">
+      <!-- Company Logo Area -->
+      <div class="splash-logo-container">
+        <!-- Try to load your company logo - REPLACE THIS PATH -->
+        <img src="./app/template/assets/img/digitalcom.png" 
+             alt="Company Logo" 
+             class="splash-logo"
+             onerror="this.onerror=null; this.style.display='none'; this.parentElement.innerHTML='<div class=\'splash-logo-fallback\'><span>🏢</span></div>';">
+      </div>
+      
+      <!-- Welcome Messages -->
+      <div class="splash-welcome">WELCOME TO</div>
+      <div class="splash-company">DigitalCom</div>
+      
+      <!-- Enhanced Loading Indicator -->
+      <div class="custom-loader">
+        <div class="custom-loader-circle"></div>
+        <div class="custom-loader-inner"></div>
+      </div>
+      
+      <div class="loading-text">
+        Initializing Smart AC System<span class="loading-dots">...</span>
+      </div>
+      
+      <!-- Optional Progress Bar -->
+      <div class="loading-progress">
+        <div class="loading-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+      
+      // Get splash screen element
+      const splash = document.getElementById('custom-splash');
+      
+      // Animated loading text
+      const loadingTextEl = document.querySelector('.loading-text');
+      const dotsEl = document.querySelector('.loading-dots');
+      let dotCount = 0;
+      
+      // Animate loading dots
+      if (dotsEl) {
+        setInterval(function() {
+          if (splash && splash.style.visibility !== 'hidden') {
+            dotCount = (dotCount % 3) + 1;
+            dotsEl.textContent = '.'.repeat(dotCount);
+          }
+        }, 500);
+      }
+      
+      // Function to hide splash screen
+      function hideSplash() {
+        if (splash) {
+          splash.classList.add('splash-hidden');
+          // Remove splash from DOM after animation
+          setTimeout(function() {
+            if (splash && splash.parentNode) {
+              splash.parentNode.removeChild(splash);
+            }
+          }, 600);
+        }
+      }
+      
+      // Hide splash when CH5 is ready
+      if (window.CH5) {
+        // CH5 already loaded
+        setTimeout(hideSplash, 1000);
+      } else {
+        // Wait for CH5 to initialize
+        document.addEventListener('ch5-ready', hideSplash);
+        
+        // Fallback: hide after maximum 4 seconds
+        setTimeout(hideSplash, 4000);
+      }
+      
+      // Also hide when all assets are loaded
+      window.addEventListener('load', function() {
+        setTimeout(hideSplash, 500);
+      });
+      
+      // Optional: Update loading text based on progress
+      // You can call this from your Angular components
+      window.updateSplashMessage = function(message) {
+        if (loadingTextEl && splash && splash.style.visibility !== 'hidden') {
+          const textSpan = loadingTextEl.childNodes[0];
+          if (textSpan && textSpan.nodeType === Node.TEXT_NODE) {
+            textSpan.textContent = message || 'Initializing Smart AC System';
+          }
+        }
+      };
+    })();
+  </script>
+  
+  
+  <script src="./libraries/cr-com-lib.c9f6e411.js"></script>
+  
+  <script src="./libraries/component.js"></script>
+  
+</body>
+
+</html>

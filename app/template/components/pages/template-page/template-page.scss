@@ -1,0 +1,692 @@
+@import "./../../../../template/assets/scss/all-var-fns-mix";
+
+.toggler {
+  display: flex;
+  align-items: center;
+}
+
+.footer-page {
+  font-size: 14px;
+  display: none !important;
+}
+
+
+
+// CH5C - 1519 from line number 12-24 is iphone design css it will be uncommented  once crestron one app fixes it
+// css is specific for iphone notch design
+// .navbar-brand {
+//   padding-left: env(safe-area-inset-left);
+//   padding-right: env(safe-area-inset-right);
+
+//   @supports(padding: max(0px)) {
+//     .navbar-brand {
+//       padding-left: max(12px, env(safe-area-inset-left));
+//       padding-right: max(12px, env(safe-area-inset-right));
+//     }
+//   }
+// }
+
+// CH5C-15398 - Please DO NOT remove the below class
+.ch5-hide-dis {
+  display: none !important;
+}
+
+.page-height-vh {
+  height: 100vh !important;
+}
+
+// To see transitionOut of page animation 
+.ch5-show-vis-position {
+  visibility: visible !important;
+  position: fixed;
+  left: 0;
+}
+
+#infobtn.warn {
+  position: relative;
+
+  &:after {
+    content: "!";
+    position: absolute;
+    background: #dc3545;
+    color: $white;
+    border-radius: 50%;
+    height: 13px;
+    border: 1px solid #711c24;
+    width: 13px;
+    line-height: 12px;
+    text-align: center;
+    top: -2px;
+    right: -2px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+}
+
+// #template-index-import-page,
+// #template-index-import-page > div {
+//   max-height: 100%;
+//   height: 100%;
+// }
+
+#wrapper {
+  display: flex;
+  max-height: 100%;
+  height: 100%;
+  flex-direction: column;
+}
+
+#template-page-import-page,
+#template-page-import-page > div {
+  max-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#header-index-page {
+  height: $header-height;
+
+  @include media-breakpoint-down(sm) {
+    height: $header-height-sm;
+  }
+}
+
+#template-content-background {
+  --ch5-background--transition-duration: 0;
+}
+
+#content-index-page {
+  flex: 1;
+  overflow-y: hidden;
+  overflow-x: hidden;
+  display: flex;
+
+  &div {
+    height: 100%;
+  }
+}
+
+// #template-content-page-wrapper,
+// #template-content-page-content {
+//   display: flex;
+//   /* use the flex model */
+//   max-height: 100%;
+//   height: 100%;
+//   flex-direction: column;
+//   /* learn more: http://philipwalton.github.io/solved-by-flexbox/demos/sticky-footer/ */
+// }
+
+#content-index-body {
+  flex: 1;
+  overflow-y: auto;
+  // CH5C - 1519 from line number 90-98 is iphone design css it will be uncommented  once crestron one app fixes it
+  // css is specific for iphone notch design (CH5C-1519)
+  /* learn more about iphone notch design: https://webkit.org/blog/7929/designing-websites-for-iphone-x/ */
+  // padding-left: env(safe-area-inset-left);
+  // padding-right: env(safe-area-inset-right);
+
+  // @supports(padding: max(0px)) {
+  //   #content-index-body {
+  //     padding-left: max(12px, env(safe-area-inset-left));
+  //     padding-right: max(12px, env(safe-area-inset-right));
+  //   }
+  // }
+
+  .swiper-wrapper {
+    height: 100%;
+  }
+
+  .ch5-viewchild {
+    display: block;
+    overflow: hidden;
+    overflow-y: auto;
+    margin: 0;
+    transform: translate3d(0px, 0px, 0px);
+
+    ch5-import-htmlsnippet > div {
+      height: 100%;
+      min-width: 100%;
+    }
+  }
+}
+
+// The below CSS is used for setting a fixed panel height - without overflow-y (scrollbar)
+// This is primarily used in Construct and must NOT be removed
+.panel-height {
+  #content-index-body {
+    overflow: hidden;
+
+    .ch5-viewchild {
+      overflow: hidden;
+    }
+  }
+}
+
+#brandLogo {
+  max-width: 100%;
+  height: $header-brandlogo-height;
+  outline: none;
+  width: 90%;
+
+  img {
+    width: auto;
+  }
+
+  @include media-breakpoint-down(sm) {
+    height: $header-brandlogo-height-sm;
+  }
+}
+
+// Header Page
+div#pageStatusIdentifier {
+  background-color: #ffcc00;
+  display: -webkit-flex;
+  display: flex;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  height: 4px;
+  width: 100%;
+  margin: 0;
+
+  &:before {
+    height: 4px;
+    width: 100%;
+    margin: 0;
+    content: "";
+  }
+
+  &.loading:before {
+    background-color: #ff7f00;
+    -webkit-animation: running-progress 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: running-progress 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  &.success:before {
+    background-color: #01c851;
+  }
+
+  &.error:before {
+    background-color: #ff3548;
+  }
+
+  &.warning:before {
+    background-color: #ff8800;
+  }
+
+  &.hide {
+    display: none;
+
+    &::before {
+      content: none !important;
+    }
+  }
+}
+
+@-webkit-keyframes running-progress {
+  0% {
+    margin-left: 0;
+    margin-right: 100%;
+  }
+
+  50% {
+    margin-left: 25%;
+    margin-right: 0;
+  }
+
+  100% {
+    margin-left: 100%;
+    margin-right: 0;
+  }
+}
+
+@keyframes running-progress {
+  0% {
+    margin-left: 0;
+    margin-right: 100%;
+  }
+
+  50% {
+    margin-left: 25%;
+    margin-right: 0;
+  }
+
+  100% {
+    margin-left: 100%;
+    margin-right: 0;
+  }
+}
+
+// Content page
+/* .horizontal-menu {
+  @include size(100%);
+
+  @include media-breakpoint-maxheight(460px) {
+    .thumb-action {
+      display: block;
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      margin-left: -16px;
+      animation: floating 15s infinite ease-in-out;
+      z-index: $zindex-fixed;
+
+      svg {
+        @include size(32px);
+        transform: rotate(90deg);
+      }
+    }
+
+    .swiper-thumb {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 100%;
+      transition: transform 300ms ease-out;
+      -webkit-transform: none;
+      transform: none;
+      z-index: ($zindex-fixed - 2);
+
+      &.open {
+        transition: transform 300ms ease-out;
+        -webkit-transform: translateY(-100%);
+        transform: translateY(-100%);
+
+        & + .thumb-action {
+          display: none;
+          animation: none;
+        }
+      }
+    }
+  }
+} */
+
+
+
+.no-menu {
+  @include size(100%);
+}
+
+.vertical-menu {
+  @include size(100%);
+
+  .vertical-menu-cols {
+    position: relative;
+    flex-wrap: nowrap;
+    flex: auto;
+    height: 100%;
+    flex-direction: row;
+    display: flex;
+  }
+
+  .vertical-menu-child-col {
+    max-width: calc(100% - 60px);
+    display: flex;
+    flex-grow: 2;
+  }
+
+  // thumbnail swiper
+  .nav-panel {
+    position: relative;
+
+    @include media-breakpoint-up(md) {
+      width: 60px;
+    }
+  }
+
+  .height-for-list-menu {
+    height: 100%;
+    background-color: #cacaca;
+  }
+
+  .swiper-thumb {
+    @include list-unstyled();
+    margin: 0;
+    text-align: center;
+    padding-top: 5px;
+    transition: all 0.3s linear;
+    position: absolute;
+    top: 0;
+    height: 100%;
+    left: 0;
+    width: 100%;
+    z-index: 9;
+    max-width: none !important;
+
+    .list-item {
+      height: auto;
+
+      .vertical-list-item {
+        padding-left: 2px;
+
+        ch5-button {
+          display: block;
+
+          .ch5-button {
+            padding-left: 7px;
+            opacity: 0.35;
+            border: 0;
+            border-radius: 0;
+            @include size(100%, 54px);
+
+            .cb-btn {
+              text-align: left;
+              justify-content: flex-start;
+              @include size(100%);
+            }
+
+            &.ch5-button--selected {
+              opacity: 1;
+            }
+          }
+        }
+
+        .ch5-button--label {
+          font-size: rem-calc(20px);
+          text-transform: uppercase;
+          font-weight: 400;
+          line-height: 1;
+          letter-spacing: 1px;
+          margin: 0 0 0 10px;
+          @include text-truncate;
+        }
+
+        .ch5-button--img {
+          text-shadow: 1px 1px 1px #777;
+          min-width: 36px;
+          min-height: 36px;
+          width: 36px;
+        }
+
+        .material-icons.ch5-button--icon,
+        .material-icons-outline.ch5-button--icon,
+        .material-icons-round.ch5-button--icon,
+        .material-icons-sharp.ch5-button--icon,
+        .material-icons-twotone.ch5-button--icon,
+        .fa,
+        .fas,
+        .far,
+        .fal,
+        .fad,
+        .fab {
+          font-size: 36px;
+        }
+
+        .ch5-button--icon {
+          font-size: 36px;
+          min-width: 36px;
+          min-height: 36px;
+          width: 36px;
+        }
+      }
+
+      &:last-child {
+        .vertical-list-item {
+          padding-bottom: 4px;
+        }
+      }
+    }
+
+    &.open {
+      width: 256px !important;
+      left: 0;
+    }
+
+    @include media-breakpoint-down(sm) {
+      left: -10px;
+
+      .list-item .svgImg {
+        @include size(36px);
+      }
+
+      &.open {
+        width: 200px !important;
+      }
+    }
+  }
+
+  .trigger-view-col {
+    flex-basis: 0;
+    flex-grow: 1;
+    max-width: 100%;
+  }
+}
+
+// ============================================================
+// Footer Page Navigator — Dark Theme + SCROLLABLE
+// Covers: 320px → 4K (2560px+)
+// ============================================================
+
+// ── Design tokens ─────────────────────────────────────────
+$footer-bg: #0d1117;
+$footer-border-top: rgba(255, 255, 255, 0.07);
+$footer-active-from: #4f8ef7;
+$footer-active-to: #6c63ff;
+$footer-active-glow: rgba(79, 142, 247, 0.30);
+$footer-text-muted: rgba(255, 255, 255, 0.38);
+$footer-text-active: #ffffff;
+
+// ── Height per breakpoint ─────────────────────────────────
+$footer-height-xs: 44px;
+$footer-height-sm: 52px;
+$footer-height-md: 58px;
+$footer-height-lg: 64px;
+$footer-height-xl: 72px;
+$footer-height-4k: 90px;
+$footer-height-8k: 100px;
+
+// ── Label size per breakpoint ─────────────────────────────
+$label-xs: 8px;
+$label-sm: 9px;
+$label-md: 10px;
+$label-lg: 12px;
+$label-xl: 13px;
+$label-4k: 16px;
+$label-8k: 18px;
+
+// ── Indicator bar thickness ───────────────────────────────
+$bar-sm: 2px;
+$bar-lg: 3px;
+$bar-4k: 4px;
+$bar-8k: 5px;
+
+// ===========================================================
+// 1. OUTER WRAPPER
+// ===========================================================
+#footer-page {
+  background-color: $footer-bg !important;
+  border-top: 1px solid $footer-border-top;
+  padding: 0 !important;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+  position: relative;
+  width: 100%;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 8%;
+    right: 8%;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(79, 142, 247, 0.45) 40%,
+      rgba(108, 99, 255, 0.45) 60%,
+      transparent
+    );
+    pointer-events: none;
+  }
+}
+
+// ===========================================================
+// 2. MENU SHELL + SCROLLING
+// ===========================================================
+.horizontal-footer-menu {
+  display: flex !important;
+  background-color: $footer-bg !important;
+  line-height: 1.2;
+  width: 100%;
+  overflow: hidden;                    // Important for scrolling
+  height: 70px;
+
+  .swiper-thumb {
+    width: 100%;
+    background: transparent;
+    max-width: none !important;
+  }
+
+  .ch5-list-horizontal {
+    display: flex !important;
+    flex-wrap: nowrap !important;           // ← Prevents wrapping
+    justify-content: flex-start !important; // ← Crucial for scrolling
+    align-items: stretch;
+    background: transparent;
+    width: max-content;                     // Allows content to grow
+    min-width: 100%;
+    padding: 0 8px;
+    overflow-x: auto !important;            // ← Enables horizontal scroll
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;      // Smooth momentum on iOS
+    scrollbar-width: thin;
+    scrollbar-color: rgba(79, 142, 247, 0.3) transparent;
+    
+
+
+    &::-webkit-scrollbar {
+      height: 4px;
+    }
+    &::-webkit-scrollbar-thumb {
+      background: rgba(79, 142, 247, 0.4);
+      border-radius: 4px;
+    }
+  }
+
+  // ===========================================================
+  // 3. EACH NAV ITEM
+  // ===========================================================
+  .list-item {
+    flex: 0 0 auto;                        // ← Important: prevents shrinking
+    min-width: 68px;                       // Minimum width per item
+    width: auto;
+
+    .horizontal-list-item {
+      min-height: $footer-height-sm;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+
+      ch5-button > div {
+        min-height: $footer-height-sm;
+        background: transparent;
+      }
+
+      .ch5-button {
+        opacity: 1 !important;
+        border: 0;
+        border-radius: 0;
+        background: transparent !important;
+        width: 100%;
+        height: $footer-height-sm;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 0 6px;
+        transition: transform 0.18s ease;
+        position: relative;
+        overflow: hidden;
+        font-size: large;
+
+        // Active indicator bar
+        &::after {
+          content: '';
+          position: absolute;
+          bottom: 0;
+          left: 12%;
+          right: 12%;
+          height: $bar-sm;
+          border-radius: 2px 2px 0 0;
+          background: linear-gradient(90deg, $footer-active-from, $footer-active-to);
+          opacity: 0;
+          transform: scaleX(0);
+          transition: all 0.22s ease;
+        }
+
+        &:hover .ch5-button--label { 
+          color: #e4e9f7; 
+        }
+        &:active { 
+          transform: scale(0.94); 
+        }
+
+        &.ch5-button--selected {
+          &::after {
+            opacity: 1;
+            transform: scaleX(1);
+          }
+          &::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(
+              ellipse 90% 90% at 50% 100%,
+              #4f8ef7 0%,
+              transparent 90%
+            );
+          }
+          .ch5-button--label {
+            color: $footer-text-active;
+            font-weight: 600;
+          }
+        }
+      }
+
+      .ch5-button--label {
+        font-size: $label-xl  !important;
+        font-weight: 500;
+        text-transform: capitalize;
+        letter-spacing: 0.7px;
+        color: $footer-text-muted;
+        margin: 0;
+        padding: 0;
+        transition: color 0.22s ease;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+        font-family: 'Sora', sans-serif;
+        line-height: 1;
+      }
+
+      // Hide icons (keep only labels)
+      .material-icons,
+      .ch5-button--img,
+      .ch5-button--icon {
+        display: none !important;
+      }
+    }
+  }
+
+  // ===========================================================
+  // 4. RESPONSIVE BREAKPOINTS (same as before + better mobile)
+  // ===========================================================
+  @media (max-width: 374px) {
+    .list-item { min-width: 58px; }
+    .ch5-button--label { font-size: $label-xs; }
+  }
+
+  @media (min-width: 576px) and (max-width: 991px) {
+    .list-item .horizontal-list-item { min-height: $footer-height-md; }
+    .ch5-button { height: $footer-height-md; }
+    .ch5-button--label { font-size: $label-md; }
+  }
+
+  // ... (you can keep the rest of your breakpoints as they were)
+
+  @include media-breakpoint-down(sm) {
+    .ch5-button--label { font-size: $label-xs; }
+  }
+}
