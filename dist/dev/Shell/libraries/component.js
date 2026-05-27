@@ -3679,82 +3679,570 @@ const templateVersionInfoModule = (() => {
 		componentCount,
 		logSubscriptionsCount
 	};
-})();/* page1.js */
+})();/* page1.js — Smart Home Control (4 Widgets)
+ * v5 changes (pill card + long-press):
+ *   - Area cards are now horizontal PILLS: circular lamp button on the
+ *     left, room name on the right.
+ *   - The lamp icon IS the ON/OFF toggle. Tapping it pulses the 'on' or
+ *     'off' preset and flips the amber-glow visual state. It stays in
+ *     sync with preset buttons and feedback from CP4.
+ *   - HOLDING the card body for LONG_PRESS_MS ms opens the detail popup
+ *     (default 2000ms). Taps on the lamp don't trigger the long-press;
+ *     moving the finger > 10px or releasing early cancels it. A blue
+ *     progress fill sweeps across the card during the hold (CSS).
+ *
+ * v4 (kept):
+ *   - Preset system is CATALOG-DRIVEN via window.LIGHT_PRESETS and each
+ *     card's data-presets + data-join-<key> attributes.
+ *   - 13 preset keys supported by default (on/off/dim/relax/tv/guest/
+ *     service/p10..p15). Popup builds buttons dynamically per room.
+ *
+ * v3 (kept):
+ *   - Popup is a SHARED modal, position:fixed, centered in the current
+ *     viewport. Portaled to <body> on first open to survive CH5
+ *     ancestor transforms.
+ */
+
 const page1Module = (() => {
     'use strict';
 
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
 
-        setupButtonEventListeners();
-        setupSliders();
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('b', join, true);
+        setTimeout(() => CrComLib.publishEvent('b', join, false), ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    // ====================== PRESET CATALOG ======================
+    // Fallback if the HTML didn't define window.LIGHT_PRESETS. The real
+    // catalog lives in page1.html <head> so it's easy to edit.
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) ||
+               DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    // "tv" → "Tv" (so data-join-tv → dataset.joinTv)
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    // How long the user must hold an area-card body before the popup opens.
+    // Change this value (milliseconds) to tune the hold duration. The CSS
+    // progress-fill animation (.area-card::before) MUST match — see
+    // `transition: transform <LONG_PRESS_MS>` in page1.css.
+    const LONG_PRESS_MS = 600;
+
+    // Movement (in pixels) that cancels the hold. Prevents accidental
+    // long-presses when the user is scrolling.
+    const LONG_PRESS_CANCEL_PX = 10;
+
+    /**
+     * Attach a long-press handler to an element.
+     *   callback(element)  fires after `ms` ms of sustained press
+     * Cancels on pointerup / pointercancel / pointerleave, on movement
+     * beyond the threshold, or when the user starts on the lamp button.
+     *
+     * Uses Pointer Events so it works uniformly on touch + mouse + pen.
+     */
+    function attachLongPress(el, callback, ms) {
+        let timer       = null;
+        let startX      = 0;
+        let startY      = 0;
+        let didFire     = false;
+        let pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            // Don't trigger long-press when the user taps the lamp icon
+            // (it's the ON/OFF toggle) or any explicit inner button.
+            if (e.target.closest('.acard-bulb') ||
+                e.target.closest('button.acard-bulb')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+
+            didFire     = false;
+            pressActive = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            el.classList.add('lp-holding');
+
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            const dx = Math.abs(e.clientX - startX);
+            const dy = Math.abs(e.clientY - startY);
+            if (dx > LONG_PRESS_CANCEL_PX || dy > LONG_PRESS_CANCEL_PX) {
+                clear();
+            }
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => {
+            el.addEventListener(ev, clear);
+        });
+
+        // Suppress the browser's native long-press context menu on touch
+        // devices so our own progress-fill is what the user sees.
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};          // key → { element, presets, joins, analog, fb, ... }
+    let   currentPanelArea = null;
+    let   panelPortalDone  = false;
+
+    // ====================== INIT ======================
+    function onInit() {
+        console.log('✅ Page 1 Initialized (v5 — pill cards + long-press)');
+
+        ensurePanelClosed();
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
         setupFeedbackSubscriptions();
+        startClock();
         requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
+        notifyActivePage();
+    }
+
+    function ensurePanelClosed() {
+        document.getElementById('areaPanel')       ?.classList.remove('open');
+        document.getElementById('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    /**
+     * Move the panel + overlay to become direct children of <body>.
+     * This ensures position:fixed always works, even if some ancestor
+     * (common in CH5 shells) has a transform/filter/perspective that would
+     * otherwise make it positioned relative to that ancestor instead of
+     * the viewport.  Done once, on first open.
+     */
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = document.getElementById('areaPanel');
+        const overlay = document.getElementById('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
     }
 
     // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
+    function setupWidgetNav() {
         const firstTab = document.querySelector('.tab-btn.active');
         if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
+            const name = firstTab.getAttribute('data-widget') || 'lights';
+            switchWidget(name, firstTab);
         }
     }
 
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    window.switchWidget = function (widgetName, clickedBtn) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
 
-        // Switch visible widget
         document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
+        const active = document.getElementById('widget-' + widgetName);
+        if (active) active.classList.add('active');
 
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
+        sendSerial('active_widget_name', widgetName);
     };
 
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
+    window.switchTVSubWidget = function (subwidgetName, clickedBtn) {
+        document.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+
         document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
+        const el = document.getElementById(subwidgetName);
+        if (el) el.classList.add('active');
     };
 
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
+    // ====================== SHARED: TOGGLE TILES (AC) ======================
+    window.toggleTile = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
         const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
         if (!tog || !tile || !lbl) return;
 
         const isOn = tog.checked;
         tile.classList.toggle(cls, isOn);
         lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
 
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        const cards = document.querySelectorAll('.area-card');
+        cards.forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            // 1) Which presets does this room offer?
+            const presetsAttr = (card.dataset.presets || '').trim();
+            const presetKeys = presetsAttr
+                ? presetsAttr.split(',').map(s => s.trim()).filter(Boolean)
+                : [];
+
+            // 2) Build the join map for those presets.
+            //    data-join-<key>  →  card.dataset.join<Key>
+            const joins = {};
+            presetKeys.forEach(pk => {
+                const attr = 'join' + capitalize(pk);
+                const j = (card.dataset[attr] || '').trim();
+                if (j) joins[pk] = j;
+            });
+
+            // 3) Optional per-card label override: data-label-<key>="My Name"
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const attr = 'label' + capitalize(pk);
+                const v = (card.dataset[attr] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   joins,
+                labelOverrides: overrideLabels,
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                isOn:    false,
+                preset:  'off',
+                level:   0
+            };
+
+            // 4) Long-press on the card body → open the detail popup.
+            attachLongPress(card, (el) => {
+                window.openAreaPanel(el, null);
+            }, LONG_PRESS_MS);
+        });
+        updateOnCountBadge();
     }
 
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
+    /** Return the display label for a preset, honoring per-card overrides. */
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st && st.labelOverrides && st.labelOverrides[presetKey]) {
+            return st.labelOverrides[presetKey];
+        }
+        return presetInfo(presetKey).label;
+    }
 
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+        document.getElementById('globalAllOn')?.addEventListener('click', () => {
+            pulse('100');
+            applyAllAreas('on');
+        });
+        document.getElementById('globalRelax')?.addEventListener('click', () => {
+            pulse('101');
+            applyAllAreas('relax');
+        });
+        document.getElementById('globalDim')?.addEventListener('click', () => {
+            pulse('102');
+            applyAllAreas('dim');
+        });
+        document.getElementById('globalAllOff')?.addEventListener('click', () => {
+            pulse('103');
+            applyAllAreas('off');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    /** Apply a preset visually to every area that supports it. */
+    function applyAllAreas(preset) {
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            setAreaVisual(k, preset);
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+
+        const card = st.element;
+
+        // Visual class: on/dim styles brighter, everything-not-off uses "alit",
+        // relax is a warmer tint kept for backward-compat.
+        card.classList.remove('alit', 'arelax');
+        if (preset === 'off') {
+            /* no highlight */
+        } else if (preset === 'relax') {
+            card.classList.add('arelax');
+        } else {
+            card.classList.add('alit');
+        }
+
+        // Reflect on/off on the lamp button for a11y (pressed state)
+        const bulb = document.getElementById('abulb-' + key);
+        if (bulb) bulb.setAttribute('aria-pressed', st.isOn ? 'true' : 'false');
+
+        // If the panel is currently showing this area, sync it too
+        if (currentPanelArea === key) refreshPanelStatus();
+
+        updateOnCountBadge();
+    }
+
+    function updateOnCountBadge() {
+        const badge = document.getElementById('lightsOnCount');
+        if (!badge) return;
+        const count = Object.values(areaState).filter(s => s.isOn).length;
+        badge.textContent = count + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    /** Build the preset buttons for the currently-open area. */
+    function renderPanelPresets(areaKey) {
+        const grid = document.getElementById('panelPresetGrid');
+        if (!grid) return;
+        grid.innerHTML = '';
+
+        const st = areaState[areaKey];
+        if (!st) return;
+
+        st.presets.forEach(pk => {
+            const info = presetInfo(pk);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'preset-btn preset-' + (info.color || 'generic');
+            btn.dataset.preset = pk;
+            btn.innerHTML =
+                '<span class="preset-ico">' + (info.icon || '•') + '</span>' +
+                '<span class="preset-lbl">' + labelFor(areaKey, pk) + '</span>';
+            btn.addEventListener('click', () => sendAreaPreset(pk));
+            grid.appendChild(btn);
+        });
+    }
+
+    /**
+     * Open the shared popup for the area whose card was long-pressed.
+     * Positioning: fixed + centered in the current viewport.
+     *
+     * v5: this is now invoked ONLY by the long-press handler, not from a
+     * direct click. The `event` parameter is kept for backward compat (some
+     * callers still pass a click event) and to allow guarding against taps
+     * on the lamp icon.
+     */
+    window.openAreaPanel = function (cardEl, event) {
+        // Ignore triggers that came from the lamp toggle itself
+        if (event && event.target &&
+            event.target.closest('.acard-bulb')) {
+            return;
+        }
+
+        const key = cardEl.dataset.area;
+        const st = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        // Header
+        document.getElementById('panelIco').textContent   = st.icon;
+        document.getElementById('panelTitle').textContent = st.label;
+        document.getElementById('panelSub').textContent   = 'Lighting Control';
+
+        // Preset buttons — built fresh from this area's preset list
+        renderPanelPresets(key);
+
+        // Dimmer visibility + join labels
+        const dimmerEl = document.getElementById('panelDimmer');
+        if (st.analog) {
+            dimmerEl.classList.remove('hidden');
+            document.getElementById('panelDimJoin').textContent = 'Analog Join ' + st.analog;
+            document.getElementById('panelDimHint').textContent =
+                'Feedback ← Analog Join ' + (st.fb || '—');
+
+            const level  = st.level || 0;
+            const slider = document.getElementById('panelDimSlider');
+            if (slider) slider.value = level;
+            document.getElementById('panelDimValue').textContent = level;
+            updatePanelDial(level);
+        } else {
+            dimmerEl.classList.add('hidden');
+        }
+
+        refreshPanelStatus();
+
+        document.getElementById('areaPanelOverlay').classList.add('open');
+        document.getElementById('areaPanel').classList.add('open');
+
+        document.body.style.overflow = 'hidden';
+
+        sendSerial('active_area_name', st.label);
+    };
+
+    window.closeAreaPanel = function () {
+        document.getElementById('areaPanelOverlay').classList.remove('open');
+        document.getElementById('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    // Escape key closes the panel
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) {
+            window.closeAreaPanel();
+        }
+    });
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+
+        const pill = document.getElementById('panelStatusPill');
+        const txt  = document.getElementById('panelStatusText');
+        if (!pill || !txt) return;
+
+        // Status pill styling: on=green, off=red, everything-else=warm
         pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
+        if (st.preset === 'on')       pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+
+        // Highlight the active preset button (if it's in the current grid)
+        document.querySelectorAll('#panelPresetGrid .preset-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.preset === st.preset);
+        });
     }
 
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        // Preset buttons are attached dynamically in renderPanelPresets().
+        // Only the dimmer slider is wired here (static DOM element).
+        const slider = document.getElementById('panelDimSlider');
+        slider?.addEventListener('input', (e) => {
+            if (!currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st || !st.analog) return;
+
+            const v = parseInt(e.target.value, 10);
+            st.level = v;
+            document.getElementById('panelDimValue').textContent = v;
+            updatePanelDial(v);
+            sendAnalog(st.analog, v);
+        });
+    }
+
+    function sendAreaPreset(preset) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+
+        const join = st.joins[preset];
+        if (join) {
+            pulse(join);
+        } else {
+            console.warn('[lights] No join configured for preset "' + preset +
+                         '" on area "' + currentPanelArea + '"');
+        }
+
+        // Optimistic UI (reconciled by feedback sub if configured)
+        setAreaVisual(currentPanelArea, preset);
+    }
+
+    // ====================== LIGHTS: LAMP-ICON ON/OFF TOGGLE ======================
+    /**
+     * v5 — the lamp icon IS the on/off toggle. Tapping it flips between
+     * the 'on' and 'off' presets for that room and updates the visual.
+     * `event.stopPropagation()` prevents the tap from being interpreted
+     * as the start of a long-press on the card body.
+     */
+    window.handleAreaLampToggle = function (key, event) {
+        if (event) event.stopPropagation();
+
+        const st = areaState[key];
+        if (!st) return;
+
+        const wantOn = !st.isOn;
+        const preset = wantOn ? 'on' : 'off';
+
+        const join = st.joins[preset];
+        if (join) {
+            pulse(join);
+        } else {
+            console.warn('[lights] Lamp tapped but no data-join-' + preset +
+                         ' on area "' + key + '"');
+        }
+
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = document.getElementById('panel-arc-fill');
+        const label = document.getElementById('panel-arc-label');
         if (!fill) return;
 
         const cx = 100, cy = 105, r = 76;
@@ -3768,4594 +4256,1100 @@ const page1Module = (() => {
         } else if (pct >= 100) {
             fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
         } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+            const largeArc = pct > 50 ? 1 : 0;
+            fill.setAttribute('d', `M 24 105 A 76 76 0 ${largeArc} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
         }
         if (label) label.textContent = pct + '%';
     }
 
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
 
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
 
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
+            // Analog dimmer feedback (0-100)
+            if (st.fb) {
+                subAnalog(st.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.level = v;
+                    if (currentPanelArea === key) {
+                        const slider = document.getElementById('panelDimSlider');
+                        if (slider) slider.value = v;
+                        document.getElementById('panelDimValue').textContent = v;
+                        updatePanelDial(v);
                     }
                 });
             }
-        }
 
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
+            // Digital feedback — for EVERY preset this room supports.
+            // Convention: feedback join = send join + 100.
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
             });
         });
-        
+    }
 
+    // ====================== SHADES ======================
+    /**
+     * Custom drag-thumb control — no <input type="range">.
+     * The thumb IS the stop button:
+     *   • TAP  (< STOP_MARGIN px movement)  → pulse stop join
+     *   • DRAG UP / RIGHT past DEAD_ZONE    → pulse open join (once per drag)
+     *   • DRAG DOWN / LEFT past DEAD_ZONE   → pulse close join (once per drag)
+     *   • RELEASE                           → thumb springs back to centre
+     */
+    const STOP_MARGIN = 8;   // px — max movement still treated as a tap
+    const DEAD_ZONE   = 22;  // px from start before direction fires
+
+    const shadeState = {};
+
+    function setupShades() {
+        document.querySelectorAll('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key         = card.dataset.shade;
+        const label       = card.dataset.label       || 'Shade';
+        const icon        = card.dataset.icon        || '🪟';
+        const joinOpen    = card.dataset.joinOpen;
+        const joinClose   = card.dataset.joinClose;
+        const joinStop    = card.dataset.joinStop;
+        const joinPos     = card.dataset.joinPos;
+        const joinFb      = card.dataset.joinFb;
+        const isVert      = (card.dataset.orientation || 'vertical') === 'vertical';
+
+        shadeState[key] = { pos: 0, isOpen: false };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}">–</span>
+              </div>
+            </div>
+            
+          </div>
+
+          <div class="sc-track-wrap sc-orient-${isVert ? 'vert' : 'horz'}" id="strack-${key}">
+            <div class="sc-track-bg">
+              <div class="sc-track-fill" id="sfill-${key}"></div>
+            </div>
+            <div class="sc-labels ${isVert ? 'sc-labels-vert' : 'sc-labels-horz'}">
+              <span>${isVert ? '↑ Open' : '← Close'}</span>
+              <span>${isVert ? '↓ Close' : '→ Open'}</span>
+            </div>
+            <div class="sc-thumb" id="sthumb-${key}">
+              <span class="sc-thumb-label">STOP</span>
+            </div>
+          </div>
+
+          <div class="sc-hint-row">
+            <span class="sc-hint">${isVert ? 'drag ↑↓ · tap = stop' : 'drag ←→ · tap = stop'}</span>
+            <span class="sc-join-hint">FB ← J${joinFb || '–'}</span>
+          </div>
+        `;
+
+        wireShadeControl(card, key, isVert, joinOpen, joinClose, joinStop, joinPos, joinFb);
+
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                shadeState[key].pos    = v;
+                shadeState[key].isOpen = v > 5;
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function wireShadeControl(card, key, isVert, joinOpen, joinClose, joinStop, joinPos, joinFb) {
+        const thumb = document.getElementById('sthumb-' + key);
+        const fill  = document.getElementById('sfill-'  + key);
+        const wrap  = document.getElementById('strack-' + key);
+
+        let dragStart = null;
+        let hasFired  = false;
+        let pointerId = null;
+
+        thumb.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            thumb.setPointerCapture(e.pointerId);
+            pointerId  = e.pointerId;
+            dragStart  = { x: e.clientX, y: e.clientY };
+            hasFired   = false;
+            thumb.style.transition = '';
+            thumb.classList.add('sc-thumb-active');
+        });
+
+        thumb.addEventListener('pointermove', (e) => {
+            if (!dragStart || e.pointerId !== pointerId) return;
+            e.preventDefault();
+
+            const dx   = e.clientX - dragStart.x;
+            const dy   = e.clientY - dragStart.y;
+            const dist = isVert ? -dy : dx;   // positive = open direction
+
+            const trackLen  = isVert ? wrap.offsetHeight : wrap.offsetWidth;
+            const maxTravel = Math.min(trackLen * 0.38, 80);
+            const clamped   = Math.max(-maxTravel, Math.min(maxTravel, dist));
+
+            // Move thumb — keep both centring axes
+            thumb.style.transform = isVert
+                ? `translateX(-50%) translateY(calc(-50% + ${-clamped}px))`
+                : `translateX(calc(-50% + ${clamped}px)) translateY(-50%)`;
+
+            // Animated fill from centre
+            const fillPct = Math.abs(clamped) / maxTravel * 44;
+            fill.style.transition = 'none';
+            if (isVert) {
+                fill.style.width  = '100%';
+                fill.style.left   = '0';
+                fill.style.right  = 'auto';
+                if (clamped >= 0) {
+                    fill.style.bottom = '50%'; fill.style.top = 'auto';
+                    fill.style.height = fillPct + '%';
+                } else {
+                    fill.style.top = '50%'; fill.style.bottom = 'auto';
+                    fill.style.height = fillPct + '%';
+                }
+            } else {
+                fill.style.height = '100%';
+                fill.style.top    = '0';
+                fill.style.bottom = 'auto';
+                if (clamped >= 0) {
+                    fill.style.left  = '50%'; fill.style.right = 'auto';
+                    fill.style.width = fillPct + '%';
+                } else {
+                    fill.style.right = '50%'; fill.style.left = 'auto';
+                    fill.style.width = fillPct + '%';
+                }
+            }
+
+            // Colour hint on thumb
+            if (clamped > DEAD_ZONE / 2) {
+                thumb.classList.add('sc-thumb-toward-open');
+                thumb.classList.remove('sc-thumb-toward-close');
+            } else if (clamped < -DEAD_ZONE / 2) {
+                thumb.classList.add('sc-thumb-toward-close');
+                thumb.classList.remove('sc-thumb-toward-open');
+            } else {
+                thumb.classList.remove('sc-thumb-toward-open', 'sc-thumb-toward-close');
+            }
+
+            // Fire direction once past dead-zone
+            if (!hasFired && Math.abs(dist) > DEAD_ZONE) {
+                hasFired = true;
+                if (dist > 0) {
+                    pulse(joinOpen);
+                    setShadeStatusText(key, '▲ Opening…');
+                    setShadeCardState(card, 'moving');
+                } else {
+                    pulse(joinClose);
+                    setShadeStatusText(key, '▼ Closing…');
+                    setShadeCardState(card, 'moving');
+                }
+            }
+        });
+
+        const onUp = (e) => {
+            if (!dragStart || e.pointerId !== pointerId) return;
+
+            const dx       = e.clientX - dragStart.x;
+            const dy       = e.clientY - dragStart.y;
+            const moveDist = Math.sqrt(dx * dx + dy * dy);
+
+            if (moveDist < STOP_MARGIN) {
+                pulse(joinStop);
+                setShadeStatusText(key, '⏹ Stopped');
+                setShadeCardState(card, 'stopped');
+            }
+
+            // Spring back — both axes
+            thumb.style.transition = 'transform 0.35s cubic-bezier(0.34,1.56,0.64,1)';
+            thumb.style.transform  = 'translateX(-50%) translateY(-50%)';
+
+            fill.style.transition = 'height 0.2s ease, width 0.2s ease';
+            fill.style.height = '0';
+            fill.style.width  = '0';
+
+            thumb.classList.remove('sc-thumb-active', 'sc-thumb-toward-open', 'sc-thumb-toward-close');
+
+            setTimeout(() => {
+                thumb.style.transition = '';
+                fill.style.transition  = '';
+            }, 380);
+
+            dragStart = null;
+            hasFired  = false;
+            pointerId = null;
+        };
+
+        thumb.addEventListener('pointerup',     onUp);
+        thumb.addEventListener('pointercancel', onUp);
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const badge = document.getElementById('spos-' + key);
+        if (badge) badge.textContent = pos + '%';
+        const card = document.querySelector(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = document.getElementById('shadesOpenCount');
+        if (!badge) return;
+        const n = Object.values(shadeState).filter(s => s.isOpen).length;
+        badge.textContent = n + ' open';
+    }
+
+    // ====================== AC ======================
+    function setupAC() {
+        // ── State ──
+        let acOn       = true;
+        let acSetTemp  = 17;   // default target temp
+        let acMode     = 'cool';
+        let acFan      = 'high';
+        const AC_MIN   = 16;
+        const AC_MAX   = 30;
+
+        // ── Elements ──
+        const card       = document.querySelector('.ac-card');
+        const powerBtn   = document.getElementById('acPowerBtn');
+        const dialTemp   = document.getElementById('acDialTemp');
+        const arcPath    = document.getElementById('acArcPath');
+        const trackBg    = document.getElementById('acTrackBg');
+        const ticksG     = document.getElementById('acTicks');
+        const decBtn     = document.getElementById('acDecBtn');
+        const incBtn     = document.getElementById('acIncBtn');
+        const modeBtns   = document.querySelectorAll('.ac-mode-btn');
+        const fanBtns    = document.querySelectorAll('.ac-fan-btn');
+        const statusBadge = document.getElementById('acStatusBadge');
+
+        // ── SVG Arc geometry ──
+        const CX = 110, CY = 110, R = 88;
+        const START_DEG = 145;   // bottom-left
+        const END_DEG   = 35;    // bottom-right  (going clockwise the short way)
+        const TOTAL_DEG = 360 - START_DEG + END_DEG; // = 250°
+
+        function degToRad(d) { return (d * Math.PI) / 180; }
+
+        function polarPoint(deg) {
+            const rad = degToRad(deg);
+            return { x: CX + R * Math.cos(rad), y: CY + R * Math.sin(rad) };
+        }
+
+        function arcD(fromDeg, toDeg) {
+            // Always draw clockwise from fromDeg to toDeg
+            const s = polarPoint(fromDeg);
+            const e = polarPoint(toDeg);
+            // Determine large-arc: if sweep > 180 in the clockwise direction
+            let sweep = toDeg - fromDeg;
+            if (sweep < 0) sweep += 360;
+            const largeArc = sweep > 180 ? 1 : 0;
+            return `M ${s.x} ${s.y} A ${R} ${R} 0 ${largeArc} 1 ${e.x} ${e.y}`;
+        }
+
+        function buildTicks() {
+            if (!ticksG) return;
+            ticksG.innerHTML = '';
+            const STEPS = 15; // one tick per degree step
+            for (let i = 0; i <= STEPS; i++) {
+                const pct  = i / STEPS;
+                const deg  = START_DEG + pct * TOTAL_DEG;
+                const pt   = polarPoint(deg);
+                const inner = { x: CX + (R - 8) * Math.cos(degToRad(deg)),
+                                 y: CY + (R - 8) * Math.sin(degToRad(deg)) };
+                const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+                line.setAttribute('x1', pt.x);
+                line.setAttribute('y1', pt.y);
+                line.setAttribute('x2', inner.x);
+                line.setAttribute('y2', inner.y);
+                line.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                line.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                line.setAttribute('stroke-linecap', 'round');
+                ticksG.appendChild(line);
+            }
+        }
+
+        function updateDial() {
+            if (!arcPath || !trackBg) return;
+            const pct    = (acSetTemp - AC_MIN) / (AC_MAX - AC_MIN);
+            const endDeg = START_DEG + pct * TOTAL_DEG;
+
+            trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+            arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+
+            if (dialTemp) dialTemp.textContent = acSetTemp + '°';
+        }
+
+        function updatePowerUI() {
+            if (!card || !powerBtn) return;
+            powerBtn.dataset.on = acOn ? 'true' : 'false';
+            card.classList.toggle('ac-is-off', !acOn);
+            if (statusBadge) statusBadge.textContent = 'Master Robe • ' + (acOn ? 'ON' : 'OFF');
+        }
+
+        function updateModeUI() {
+            modeBtns.forEach(b => {
+                b.classList.toggle('ac-mode-active', b.dataset.mode === acMode);
+            });
+        }
+
+        function updateFanUI() {
+            fanBtns.forEach(b => {
+                b.classList.toggle('ac-fan-active', b.dataset.fan === acFan);
+            });
+        }
+
+        function flashBtn(btn) {
+            if (!btn) return;
+            btn.classList.remove('ac-flash');
+            void btn.offsetWidth; // reflow
+            btn.classList.add('ac-flash');
+            setTimeout(() => btn.classList.remove('ac-flash'), 400);
+        }
+
+        // ── Power ──
+        powerBtn?.addEventListener('click', () => {
+            acOn = !acOn;
+            updatePowerUI();
+            pulse('70');
+        });
+
+        // ── +/- ──
+        decBtn?.addEventListener('click', () => {
+            if (!acOn) return;
+            if (acSetTemp > AC_MIN) {
+                acSetTemp--;
+                updateDial();
+                sendAnalog('41', acSetTemp);
+                flashBtn(decBtn);
+            }
+        });
+
+        incBtn?.addEventListener('click', () => {
+            if (!acOn) return;
+            if (acSetTemp < AC_MAX) {
+                acSetTemp++;
+                updateDial();
+                sendAnalog('41', acSetTemp);
+                flashBtn(incBtn);
+            }
+        });
+
+        // ── Modes ──
+        modeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acOn) return;
+                acMode = btn.dataset.mode;
+                updateModeUI();
+                pulse(btn.dataset.join);
+            });
+        });
+
+        // ── Fan speed ──
+        fanBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acOn) return;
+                acFan = btn.dataset.fan;
+                updateFanUI();
+                pulse(btn.dataset.join);
+            });
+        });
+
+        // ── Feedback: current room temp ──
+        subAnalog('40', (val) => {
+            const el = document.getElementById('acCurrentTemp');
+            if (el) el.textContent = Math.round(val) + '°';
+        });
+
+        // ── Feedback: setpoint from CP ──
+        subAnalog('41', (val) => {
+            acSetTemp = Math.max(AC_MIN, Math.min(AC_MAX, Math.round(val)));
+            updateDial();
+        });
+
+        // ── Init ──
+        buildTicks();
+        updateDial();
+        updatePowerUI();
+        updateModeUI();
+        updateFanUI();
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+        document.getElementById('tvPowerBtn')  ?.addEventListener('click', () => pulse('60'));
+        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => pulse('61'));
+        document.getElementById('tvHdmiBtn')   ?.addEventListener('click', () => pulse('62'));
+
+        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => pulse('60'));
+        document.getElementById('tvSourceBtn')?.addEventListener('click', () => pulse('68'));
+
+        document.getElementById('tvDpadUp')   ?.addEventListener('click', () => pulse('63'));
+        document.getElementById('tvDpadDown') ?.addEventListener('click', () => pulse('64'));
+        document.getElementById('tvDpadLeft') ?.addEventListener('click', () => pulse('65'));
+        document.getElementById('tvDpadRight')?.addEventListener('click', () => pulse('66'));
+        document.getElementById('tvDpadOk')   ?.addEventListener('click', () => pulse('67'));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i);
+            if (!btn) continue;
+            const join = '9' + String(i).padStart(2, '0');
+            btn.addEventListener('click', () => pulse(join));
+        }
+
+        document.getElementById('tvKeyEnter')?.addEventListener('click', () => pulse('100'));
+
+        document.getElementById('tvVolUpBtn')  ?.addEventListener('click', () => pulse('101'));
+        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => pulse('102'));
+        document.getElementById('tvMuteBtn')   ?.addEventListener('click', () => pulse('103'));
+        document.getElementById('tvChUpBtn')   ?.addEventListener('click', () => pulse('104'));
+        document.getElementById('tvChDownBtn') ?.addEventListener('click', () => pulse('105'));
+
+        document.querySelectorAll('.fav-btn').forEach((btn, i) => {
+            const joinNumber = 110 + i;
+            btn.addEventListener('click', () => {
+                pulse(String(joinNumber));
+                console.log(`Favorite ${i + 1} pressed → Digital Join ${joinNumber}`);
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
     function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
+        if (!hasCrestron()) return;
 
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
+        setupLightsFeedback();
     }
 
     function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
+        pulse('99');
     }
 
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page1", true);
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', 'active_state_class_page1', true);
     }
 
-    // Clock
+    // ====================== CLOCK ======================
+    function startClock() {
+        tick();
+        setInterval(tick, 15000);
+    }
     function tick() {
         const el = document.getElementById('clockDisplay');
         if (!el) return;
         const n = new Date();
         el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
     }
-    setInterval(tick, 15000);
-    tick();
 
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page1-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page1-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page10.js */
-const page10Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+    // ====================== BOOTSTRAP ======================
+    if (hasCrestron()) {
+        let loadedSubId = CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page1-import-page',
+            (value) => {
+                if (value && value['loaded']) {
+                    onInit();
+                    setTimeout(
+                        () => CrComLib.unsubscribeState(
+                            'o',
+                            'ch5-import-htmlsnippet:page1-import-page',
+                            loadedSubId
+                        ),
+                        100
+                    );
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
         } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page10", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page10-import-page', (value) => {
-        if (value && value['loaded']) {
             onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page10-import-page', loadedSubId), 100);
         }
-    });
+    }
 
     return {};
-}})();
+})();/* page2.js — Smart Home Control Page 2 (4 Widgets)
+ * Mirror of page1.js architecture with the following changes:
+ *  - Module namespace : page2Module
+ *  - All DOM IDs      : p2- prefixed (e.g. p2-areaPanel, p2-clockDisplay …)
+ *  - Digital joins    : 200–299 range
+ *  - Analog joins     : 200+ range (details below)
+ *  - CH5 snippet      : 'ch5-import-htmlsnippet:page2-import-page'
+ *  - Active-page join : active_state_class_page2
+ *
+ * ── JOIN MAP SUMMARY ──────────────────────────────────────────────────────
+ *  Global Lights presets : 200 (All On) · 201 (Relax) · 202 (Dim) · 203 (All Off)
+ *  Per-area presets      : defined in HTML data-joins (e.g. {"on":"210","dim":"211",…})
+ *  Per-area analog send  : data-analog attribute on .area-card  (e.g. "236")
+ *  Per-area analog fb    : data-fb    attribute on .area-card  (e.g. "237")
+ *  Digital fb offset     : send join + 100  (same convention as page 1)
+ *  Shades analog send    : 236  |  Shades analog fb : 235
+ *  Shades Up/Stop/Down   : 250 / 252 / 251
+ *  AC setpoint analog    : 241  |  AC room-temp fb  : 240
+ *  AC Power toggle       : 270
+ *  AC Modes Cool/Heat/Auto/Dry/Fan : 271-275
+ *  AC Fan Low/Med/High/Auto        : 276-279
+ *  AC Swing              : 281
+ *  TV Power              : 260
+ *  TV Netflix/HDMI       : 261 / 262
+ *  TV D-Pad Up/Dn/L/R/OK : 263-267
+ *  TV Source             : 268
+ *  TV Num 0-9            : 200-209  (mapped as p2 keypad range)
+ *  TV Vol Up/Dn/Mute     : 290 / 291 / 292  (NOTE: also used by global presets,
+ *                          adjust in HTML if collision — page 1 reused 100-103)
+ *  TV Ch Up/Dn           : 293 / 294
+ *  TV Favorites          : 295+
+ *  Request current state : pulse 299
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 
-
-/* page2.js */
 const page2Module = (() => {
     'use strict';
 
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
 
-        setupButtonEventListeners();
-        setupSliders();
+    function pulse(join, ms = 100) {
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, true);
+        setTimeout(() => CrComLib.publishEvent('b', join, false), ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron()) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron()) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    // ====================== STATE ======================
+    const areaState = {}; // key → { element, joins, analog, fb, isOn, level, preset }
+
+    // ====================== INIT ======================
+    function onInit() {
+        console.log('✅ Page 2 Initialized');
+
+        ensurePanelClosed();
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
         setupFeedbackSubscriptions();
+        startClock();
         requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
+        notifyActivePage();
+    }
+
+    function ensurePanelClosed() {
+        document.getElementById('p2-areaPanel')        ?.classList.remove('open');
+        document.getElementById('p2-areaPanelOverlay') ?.classList.remove('open');
     }
 
     // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
+    function setupWidgetNav() {
+        const firstTab = document.querySelector('#page2 .tab-btn.active');
         if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
+            const name = firstTab.getAttribute('data-widget') || 'lights';
+            switchWidget(name, firstTab);
         }
     }
 
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    // Exposed globally — called from HTML onclick on page 2 tabs.
+    // Uses p2- prefixed widget IDs to avoid collisions with page 1.
+    window.p2SwitchWidget = function (widgetName, clickedBtn) {
+        document.querySelectorAll('#page2 .tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
 
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
+        document.querySelectorAll('#page2 .widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('p2-widget-' + widgetName);
+        if (active) active.classList.add('active');
 
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
+        sendSerial('p2_active_widget_name', widgetName);
     };
 
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
+    // Internal alias used by setupWidgetNav
+    function switchWidget(name, btn) { window.p2SwitchWidget(name, btn); }
+
+    window.p2SwitchTVSubWidget = function (subwidgetName, clickedBtn) {
+        document.querySelectorAll('#page2 .sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+
+        document.querySelectorAll('#page2 .tv-subwidget').forEach(w => w.classList.remove('active'));
+        const el = document.getElementById('p2-' + subwidgetName);
+        if (el) el.classList.add('active');
     };
 
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
+    // ====================== SHARED: TOGGLE TILES (AC) ======================
+    window.p2ToggleTile = function (name, cls) {
+        const tog  = document.getElementById('p2-tog-'  + name);
+        const tile = document.getElementById('p2-tile-' + name);
+        const lbl  = document.getElementById('p2-lbl-'  + name);
         if (!tog || !tile || !lbl) return;
 
         const isOn = tog.checked;
         tile.classList.toggle(cls, isOn);
         lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
 
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        // Area cards live inside #page2 to avoid clashes with page 1 cards
+        const cards = document.querySelectorAll('#page2 .area-card');
+        cards.forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            let joins = {};
+            try { joins = JSON.parse(card.dataset.joins || '{}'); }
+            catch (e) { console.warn('Bad data-joins on p2', key, e); }
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                joins:   joins,
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                isOn:    false,
+                preset:  'off',
+                level:   0
+            };
+        });
+        updateOnCountBadge();
     }
 
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+        document.getElementById('p2-globalAllOn') ?.addEventListener('click', () => {
+            pulse('200');
+            applyAllAreas('on');
+        });
+        document.getElementById('p2-globalRelax') ?.addEventListener('click', () => {
+            pulse('201');
+            applyAllAreas('relax');
+        });
+        document.getElementById('p2-globalDim')   ?.addEventListener('click', () => {
+            pulse('202');
+            applyAllAreas('dim');
+        });
+        document.getElementById('p2-globalAllOff')?.addEventListener('click', () => {
+            pulse('203');
+            applyAllAreas('off');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        Object.keys(areaState).forEach(k => setAreaVisual(k, preset));
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+
+        st.preset = preset;
+        st.isOn = (preset !== 'off');
+
+        const card    = st.element;
+        const stateEl = document.getElementById('p2-astate-' + key);
+
+        card.classList.remove('alit', 'arelax');
+        if      (preset === 'on' || preset === 'dim') card.classList.add('alit');
+        else if (preset === 'relax')                  card.classList.add('arelax');
+
+        if (stateEl) {
+            stateEl.textContent =
+                preset === 'on'    ? 'ON'     :
+                preset === 'dim'   ? 'DIMMED' :
+                preset === 'relax' ? 'RELAX'  :
+                                     'OFF';
+        }
+
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+    }
+
+    function updateOnCountBadge() {
+        const badge = document.getElementById('p2-lightsOnCount');
+        if (!badge) return;
+        const count = Object.values(areaState).filter(s => s.isOn).length;
+        badge.textContent = count + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+    let currentPanelArea = null;
+
+    window.p2OpenAreaPanel = function (cardEl) {
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        currentPanelArea = key;
+
+        document.getElementById('p2-panelIco').textContent   = st.icon;
+        document.getElementById('p2-panelTitle').textContent = st.label;
+        document.getElementById('p2-panelSub').textContent   = 'Lighting Control';
+
+        const dimmerEl = document.getElementById('p2-panelDimmer');
+        if (st.analog) {
+            dimmerEl?.classList.remove('hidden');
+            document.getElementById('p2-panelDimJoin').textContent =
+                'Analog Join ' + st.analog;
+            document.getElementById('p2-panelDimHint').textContent =
+                'Feedback ← Analog Join ' + (st.fb || '—');
+
+            const level  = st.level || 0;
+            const slider = document.getElementById('p2-panelDimSlider');
+            if (slider) slider.value = level;
+            document.getElementById('p2-panelDimValue').textContent = level;
+            updatePanelDial(level);
+        } else {
+            dimmerEl?.classList.add('hidden');
+        }
+
+        refreshPanelStatus();
+
+        document.getElementById('p2-areaPanelOverlay').classList.add('open');
+        document.getElementById('p2-areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        sendSerial('p2_active_area_name', st.label);
+    };
+
+    window.p2CloseAreaPanel = function () {
+        document.getElementById('p2-areaPanelOverlay').classList.remove('open');
+        document.getElementById('p2-areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) {
+            window.p2CloseAreaPanel();
+        }
+    });
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+
+        const pill = document.getElementById('p2-panelStatusPill');
+        const txt  = document.getElementById('p2-panelStatusText');
+        if (!pill || !txt) return;
 
         pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
+        let label = 'OFF';
+        if      (st.preset === 'on')    { pill.classList.add('sp-on');  label = 'ON';    }
+        else if (st.preset === 'dim')   { pill.classList.add('sp-dim'); label = 'DIMMED'; }
+        else if (st.preset === 'relax') { pill.classList.add('sp-dim'); label = 'RELAX'; }
+        else                            { pill.classList.add('sp-off'); label = 'OFF';   }
+        txt.textContent = label;
+
+        document.querySelectorAll('#p2-areaPanel .preset-btn').forEach(b => {
+            b.classList.remove('p-active-on','p-active-dim','p-active-relax','p-active-off');
+        });
+        const btnMap = {
+            on:    ['p2-panelBtnOn',    'p-active-on'],
+            dim:   ['p2-panelBtnDim',   'p-active-dim'],
+            relax: ['p2-panelBtnRelax', 'p-active-relax'],
+            off:   ['p2-panelBtnOff',   'p-active-off']
+        };
+        const [id, cls] = btnMap[st.preset] || [];
+        if (id) document.getElementById(id)?.classList.add(cls);
     }
 
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        document.getElementById('p2-panelBtnOn')   ?.addEventListener('click', () => sendAreaPreset('on'));
+        document.getElementById('p2-panelBtnDim')  ?.addEventListener('click', () => sendAreaPreset('dim'));
+        document.getElementById('p2-panelBtnRelax')?.addEventListener('click', () => sendAreaPreset('relax'));
+        document.getElementById('p2-panelBtnOff')  ?.addEventListener('click', () => sendAreaPreset('off'));
+
+        const slider = document.getElementById('p2-panelDimSlider');
+        slider?.addEventListener('input', (e) => {
+            if (!currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st || !st.analog) return;
+
+            const v = parseInt(e.target.value, 10);
+            st.level = v;
+            document.getElementById('p2-panelDimValue').textContent = v;
+            updatePanelDial(v);
+            sendAnalog(st.analog, v);
+        });
+    }
+
+    function sendAreaPreset(preset) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+
+        const join = st.joins[preset];
+        if (join) pulse(join);
+
+        setAreaVisual(currentPanelArea, preset);
+    }
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = document.getElementById('p2-panel-arc-fill');
+        const label = document.getElementById('p2-panel-arc-label');
         if (!fill) return;
 
         const cx = 100, cy = 105, r = 76;
         const deg = -180 + pct * 1.8;
         const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
+        const ex  = cx + r * Math.cos(rad);
+        const ey  = cy + r * Math.sin(rad);
 
         if (pct <= 0) {
             fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
         } else if (pct >= 100) {
             fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
         } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+            const largeArc = pct > 50 ? 1 : 0;
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${largeArc} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
         }
         if (label) label.textContent = pct + '%';
     }
 
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
 
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
 
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
+            if (st.fb) {
+                subAnalog(st.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.level = v;
+                    if (currentPanelArea === key) {
+                        const slider = document.getElementById('p2-panelDimSlider');
+                        if (slider) slider.value = v;
+                        document.getElementById('p2-panelDimValue').textContent = v;
+                        updatePanelDial(v);
                     }
                 });
             }
-        }
 
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
+            // Digital feedback — same FB_OFFSET convention as page 1
+            const FB_OFFSET = 100;
+            ['on','dim','relax','off'].forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
             });
         });
-        
+    }
 
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
+    // ====================== SHADES ======================
+    function setupShades() {
+        const slider = document.getElementById('p2-shadeSlider');
+        slider?.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value, 10);
+            document.getElementById('p2-shadeValue').textContent = v;
+            sendAnalog('236', v);
         });
 
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
+        document.getElementById('p2-shadeUpBtn')  ?.addEventListener('click', () => pulse('250'));
+        document.getElementById('p2-shadeStopBtn')?.addEventListener('click', () => pulse('252'));
+        document.getElementById('p2-shadeDownBtn')?.addEventListener('click', () => pulse('251'));
+    }
+
+    // ====================== AC ======================
+    function setupAC() {
+        const acSlider = document.getElementById('p2-acSetpointSlider');
+        acSlider?.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value, 10);
+            const display = document.getElementById('p2-acSetValue');
+            if (display) display.textContent = v;
+            sendAnalog('241', v);
+        });
+
+        document.getElementById('p2-tog-ac')?.addEventListener('change', () => pulse('270'));
+
+        document.getElementById('p2-acCoolBtn')?.addEventListener('click', () => pulse('271'));
+        document.getElementById('p2-acHeatBtn')?.addEventListener('click', () => pulse('272'));
+        document.getElementById('p2-acAutoBtn')?.addEventListener('click', () => pulse('273'));
+        document.getElementById('p2-acDryBtn') ?.addEventListener('click', () => pulse('274'));
+        document.getElementById('p2-acFanBtn') ?.addEventListener('click', () => pulse('275'));
+
+        document.getElementById('p2-acFanLowBtn') ?.addEventListener('click', () => pulse('276'));
+        document.getElementById('p2-acFanMedBtn') ?.addEventListener('click', () => pulse('277'));
+        document.getElementById('p2-acFanHighBtn')?.addEventListener('click', () => pulse('278'));
+        document.getElementById('p2-acFanAutoBtn')?.addEventListener('click', () => pulse('279'));
+
+        document.getElementById('p2-acSwingBtn')?.addEventListener('click', () => pulse('281'));
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+        // Quick Actions
+        document.getElementById('p2-tvPowerBtn')  ?.addEventListener('click', () => pulse('260'));
+        document.getElementById('p2-tvNetflixBtn')?.addEventListener('click', () => pulse('261'));
+        document.getElementById('p2-tvHdmiBtn')   ?.addEventListener('click', () => pulse('262'));
+
+        // Remote Power & Source
+        document.getElementById('p2-tvPowerBtn2')?.addEventListener('click', () => pulse('260'));
+        document.getElementById('p2-tvSourceBtn')?.addEventListener('click', () => pulse('268'));
+
+        // D-Pad
+        document.getElementById('p2-tvDpadUp')   ?.addEventListener('click', () => pulse('263'));
+        document.getElementById('p2-tvDpadDown') ?.addEventListener('click', () => pulse('264'));
+        document.getElementById('p2-tvDpadLeft') ?.addEventListener('click', () => pulse('265'));
+        document.getElementById('p2-tvDpadRight')?.addEventListener('click', () => pulse('266'));
+        document.getElementById('p2-tvDpadOk')   ?.addEventListener('click', () => pulse('267'));
+
+        // Numeric Keypad 0-9 → joins 280–289
+        for (let i = 0; i <= 9; i++) {
+            const btn  = document.getElementById('p2-tvKey' + i);
+            if (!btn) continue;
+            const join = String(280 + i);
+            btn.addEventListener('click', () => pulse(join));
+        }
+
+        document.getElementById('p2-tvKeyEnter')?.addEventListener('click', () => pulse('269'));
+
+        // Volume & Channel
+        document.getElementById('p2-tvVolUpBtn')  ?.addEventListener('click', () => pulse('290'));
+        document.getElementById('p2-tvVolDownBtn')?.addEventListener('click', () => pulse('291'));
+        document.getElementById('p2-tvMuteBtn')   ?.addEventListener('click', () => pulse('292'));
+        document.getElementById('p2-tvChUpBtn')   ?.addEventListener('click', () => pulse('293'));
+        document.getElementById('p2-tvChDownBtn') ?.addEventListener('click', () => pulse('294'));
+
+        // Favorites → joins 295+
+        document.querySelectorAll('#page2 .fav-btn').forEach((btn, i) => {
+            const joinNumber = 295 + i;
+            btn.addEventListener('click', () => {
+                pulse(String(joinNumber));
+                console.log(`P2 Favorite ${i + 1} pressed → Digital Join ${joinNumber}`);
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+
+        setupLightsFeedback();
+
+        // AC room temp feedback
+        subAnalog('240', (val) => {
+            const el = document.getElementById('p2-acCurrentTemp');
+            if (el) el.textContent = Math.round(val) + '°C';
+        });
+
+        // Shades position feedback
+        subAnalog('235', (val) => {
+            const v = parseInt(val, 10);
+            if (isNaN(v)) return;
+            const slider = document.getElementById('p2-shadeSlider');
+            if (slider) slider.value = v;
+            const disp = document.getElementById('p2-shadeValue');
+            if (disp) disp.textContent = v;
         });
     }
 
     function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
+        pulse('299');
     }
 
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page2", true);
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', 'active_state_class_page2', true);
     }
 
-    // Clock
+    // ====================== CLOCK ======================
+    function startClock() {
+        tick();
+        setInterval(tick, 15000);
+    }
+
     function tick() {
-        const el = document.getElementById('clockDisplay');
+        const el = document.getElementById('p2-clockDisplay');
         if (!el) return;
         const n = new Date();
         el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
     }
-    setInterval(tick, 15000);
-    tick();
 
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page2-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page2-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page3.js */
-const page3Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+    // ====================== BOOTSTRAP ======================
+    if (hasCrestron()) {
+        let loadedSubId = CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page2-import-page',
+            (value) => {
+                if (value && value['loaded']) {
+                    onInit();
+                    setTimeout(
+                        () => CrComLib.unsubscribeState(
+                            'o',
+                            'ch5-import-htmlsnippet:page2-import-page',
+                            loadedSubId
+                        ),
+                        100
+                    );
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
         } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page3", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page3-import-page', (value) => {
-        if (value && value['loaded']) {
             onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page3-import-page', loadedSubId), 100);
         }
-    });
+    }
 
     return {};
-}})();
-
-
-/* page4.js */
-const page4Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page4", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page4-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page4-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page5.js */
-const page5Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page5", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page5-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page5-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page6.js */
-const page6Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page6", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page6-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page6-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page7.js */
-const page7Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page7", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page7-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page7-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page8.js */
-const page8Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page8", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page8-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page8-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
-/* page9.js */
-const page9Module = (() => {
-    'use strict';
-
-    function onInit() {
-        console.log('✅ Page 1 Initialized with 4 Widgets');
-
-        setupButtonEventListeners();
-        setupSliders();
-        setupFeedbackSubscriptions();
-        requestCurrentStatus();
-        setupTopNavigation();
-        initializeWidgets();
-    }
-
-    // ====================== WIDGET MANAGEMENT ======================
-    function initializeWidgets() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const widgetName = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(widgetName, firstTab);
-        }
-    }
-
-    window.switchWidget = function(widgetName, clickedBtn) {
-        // Update active tab
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        if (clickedBtn) clickedBtn.classList.add('active');
-
-        // Switch visible widget
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const activeWidget = document.getElementById('widget-' + widgetName);
-        if (activeWidget) activeWidget.classList.add('active');
-
-        // Optional: Send to Crestron
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('s', 'active_widget_name', widgetName);
-        }
-    };
-
-    window.switchTVSubWidget = function(subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(btn => btn.classList.remove('active'));
-        clickedBtn.classList.add('active');
-        
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        document.getElementById(subwidgetName).classList.add('active');
-    };
-
-    // ====================== SHARED FUNCTIONS ======================
-    function toggleTile(name, cls) {
-        const tog = document.getElementById('tog-' + name);
-        const tile = document.getElementById('tile-' + name);
-        const lbl = document.getElementById('lbl-' + name);
-        if (!tog || !tile || !lbl) return;
-
-        const isOn = tog.checked;
-        tile.classList.toggle(cls, isOn);
-        lbl.textContent = isOn ? 'ON' : 'OFF';
-
-        if (name === 'lights') setStatus(isOn ? 'on' : 'off');
-    }
-
-    function setStatus(s) {
-        const pill = document.getElementById('statusPill');
-        const text = document.getElementById('lightingStatus');
-        if (!pill || !text) return;
-
-        pill.className = 'spill';
-        if (s === 'on')  { pill.classList.add('sp-on');  text.textContent = 'Lights: ON'; }
-        if (s === 'off') { pill.classList.add('sp-off'); text.textContent = 'Lights: OFF'; }
-        if (s === 'dim') { pill.classList.add('sp-dim'); text.textContent = 'Lights: DIMMED'; }
-    }
-
-    function updateDial(pct) {
-        const fill = document.getElementById('arc-fill');
-        const label = document.getElementById('arc-label');
-        if (!fill) return;
-
-        const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
-        }
-        if (label) label.textContent = pct + '%';
-    }
-
-    // ====================== SLIDERS & BUTTONS ======================
-    function setupSliders() {
-        // Dimmer Slider (Lights Widget)
-        const dimSlider = document.getElementById('dimLevelSlider');
-        if (dimSlider) {
-            dimSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '31', v);
-            });
-        }
-
-        // Shades Slider
-        const shadeSlider = document.getElementById('shadeSlider');
-        if (shadeSlider) {
-            shadeSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                document.getElementById('shadeValue').textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '36', v);
-            });
-        }
-
-        // ==================== NEW: AC Setpoint Slider ====================
-        const acSlider = document.getElementById('acSetpointSlider');
-        if (acSlider) {
-            acSlider.addEventListener('input', (e) => {
-                const v = parseInt(e.target.value, 10);
-                const display = document.getElementById('acSetValue');
-                if (display) display.textContent = v;
-                if (typeof CrComLib !== 'undefined') CrComLib.publishEvent('n', '41', v);
-            });
-        }
-    }
-
-    function setupButtonEventListeners() {
-        // Lights Quick Buttons
-        document.getElementById('lightsOnBtn')?.addEventListener('click', () => {
-            setStatus('on');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = true; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '10', true);
-                setTimeout(() => CrComLib.publishEvent('b', '10', false), 100);
-            }
-        });
-
-        document.getElementById('lightsOffBtn')?.addEventListener('click', () => {
-            setStatus('off');
-            const t = document.getElementById('tog-lights');
-            if (t) { t.checked = false; toggleTile('lights', 'd-active'); }
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '11', true);
-                setTimeout(() => CrComLib.publishEvent('b', '11', false), 100);
-            }
-        });
-
-        document.getElementById('lightsDimBtn')?.addEventListener('click', () => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) {
-                slider.value = 50;
-                const v = 50;
-                document.getElementById('dimValue').textContent = v;
-                document.getElementById('dimPercentage').textContent = v + '%';
-                updateDial(v);
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('n', '31', v);
-                    CrComLib.publishEvent('b', '12', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '12', false), 100);
-                }
-            }
-        });
-
-        
-
-        // Shades Buttons
-        document.getElementById('shadeUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '50', true);
-                setTimeout(() => CrComLib.publishEvent('b', '50', false), 100);
-            }
-        });
-        document.getElementById('shadeStopBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '52', true);
-                setTimeout(() => CrComLib.publishEvent('b', '52', false), 100);
-            }
-        });
-        document.getElementById('shadeDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '51', true);
-                setTimeout(() => CrComLib.publishEvent('b', '51', false), 100);
-            }
-        });
-
-        // ==================== NEW: AC CONTROLS ====================
-        // AC Power Toggle (pulses on every change - matches Crestron toggle behavior)
-        const acToggle = document.getElementById('tog-ac');
-        if (acToggle) {
-            acToggle.addEventListener('change', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', '70', true);
-                    setTimeout(() => CrComLib.publishEvent('b', '70', false), 100);
-                }
-            });
-        }
-
-        // AC Modes
-        document.getElementById('acCoolBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '71', true);
-                setTimeout(() => CrComLib.publishEvent('b', '71', false), 100);
-            }
-        });
-        document.getElementById('acHeatBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '72', true);
-                setTimeout(() => CrComLib.publishEvent('b', '72', false), 100);
-            }
-        });
-        document.getElementById('acAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '73', true);
-                setTimeout(() => CrComLib.publishEvent('b', '73', false), 100);
-            }
-        });
-        document.getElementById('acDryBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '74', true);
-                setTimeout(() => CrComLib.publishEvent('b', '74', false), 100);
-            }
-        });
-        document.getElementById('acFanBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '75', true);
-                setTimeout(() => CrComLib.publishEvent('b', '75', false), 100);
-            }
-        });
-
-        // AC Fan Speeds
-        document.getElementById('acFanLowBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '76', true);
-                setTimeout(() => CrComLib.publishEvent('b', '76', false), 100);
-            }
-        });
-        document.getElementById('acFanMedBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '77', true);
-                setTimeout(() => CrComLib.publishEvent('b', '77', false), 100);
-            }
-        });
-        document.getElementById('acFanHighBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '78', true);
-                setTimeout(() => CrComLib.publishEvent('b', '78', false), 100);
-            }
-        });
-        document.getElementById('acFanAutoBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '79', true);
-                setTimeout(() => CrComLib.publishEvent('b', '79', false), 100);
-            }
-        });
-
-        // AC Swing
-        document.getElementById('acSwingBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '81', true);
-                setTimeout(() => CrComLib.publishEvent('b', '81', false), 100);
-            }
-        });
-
-        // ====================== TV BUTTONS & REMOTE ======================
-
-        // Quick Action Buttons (Top of TV Widget)
-        document.getElementById('tvPowerBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '61', true);
-                setTimeout(() => CrComLib.publishEvent('b', '61', false), 100);
-            }
-        });
-
-        document.getElementById('tvHdmiBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '62', true);
-                setTimeout(() => CrComLib.publishEvent('b', '62', false), 100);
-            }
-        });
-
-        // ==================== TV REMOTE CONTROLS (Inside TV Controls Sub-Widget) ====================
-
-        // Power & Source Buttons (inside remote)
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => {   // tvPowerBtn2 is the one in remote
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '60', true);
-                setTimeout(() => CrComLib.publishEvent('b', '60', false), 100);
-            }
-        });
-
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '68', true);   // You can change join number
-                setTimeout(() => CrComLib.publishEvent('b', '68', false), 100);
-            }
-        });
-
-        // ==================== D-PAD ====================
-        document.getElementById('tvDpadUp')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '63', true);
-                setTimeout(() => CrComLib.publishEvent('b', '63', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadDown')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '64', true);
-                setTimeout(() => CrComLib.publishEvent('b', '64', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadLeft')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '65', true);
-                setTimeout(() => CrComLib.publishEvent('b', '65', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '66', true);
-                setTimeout(() => CrComLib.publishEvent('b', '66', false), 100);
-            }
-        });
-
-        document.getElementById('tvDpadOk')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '67', true);
-                setTimeout(() => CrComLib.publishEvent('b', '67', false), 100);
-            }
-        });
-
-        // ==================== NUMERIC KEYPAD (0-9 + Enter) ====================
-        for (let i = 0; i <= 9; i++) {
-            const keyBtn = document.getElementById('tvKey' + i);
-            if (keyBtn) {
-                keyBtn.addEventListener('click', () => {
-                    if (typeof CrComLib !== 'undefined') {
-                        // Joins 90 to 99 for digits
-                        CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), true);
-                        setTimeout(() => CrComLib.publishEvent('b', '9' + String(i).padStart(2, '0'), false), 100);
-                    }
-                });
-            }
-        }
-
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '100', true);   // Enter button join
-                setTimeout(() => CrComLib.publishEvent('b', '100', false), 100);
-            }
-        });
-
-        // ==================== VOLUME & CHANNEL CONTROLS ====================
-        document.getElementById('tvVolUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '101', true);
-                setTimeout(() => CrComLib.publishEvent('b', '101', false), 100);
-            }
-        });
-
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '102', true);
-                setTimeout(() => CrComLib.publishEvent('b', '102', false), 100);
-            }
-        });
-
-        document.getElementById('tvMuteBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '103', true);
-                setTimeout(() => CrComLib.publishEvent('b', '103', false), 100);
-            }
-        });
-
-        document.getElementById('tvChUpBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '104', true);
-                setTimeout(() => CrComLib.publishEvent('b', '104', false), 100);
-            }
-        });
-
-        document.getElementById('tvChDownBtn')?.addEventListener('click', () => {
-            if (typeof CrComLib !== 'undefined') {
-                CrComLib.publishEvent('b', '105', true);
-                setTimeout(() => CrComLib.publishEvent('b', '105', false), 100);
-            }
-        });
-
-        // ==================== FAVORITES GRID (Dynamic) ====================
-        // Example: Assign joins starting from 110 onwards
-        const favButtons = document.querySelectorAll('.fav-btn');
-        favButtons.forEach((btn, index) => {
-            const joinNumber = 110 + index;   // 110, 111, 112 ...
-        
-            btn.addEventListener('click', () => {
-                if (typeof CrComLib !== 'undefined') {
-                    CrComLib.publishEvent('b', String(joinNumber), true);
-                    setTimeout(() => CrComLib.publishEvent('b', String(joinNumber), false), 100);
-                }
-                console.log(`Favorite ${index + 1} pressed → Digital Join ${joinNumber}`);
-            });
-        });
-        
-
-    function setupFeedbackSubscriptions() {
-        // Existing dimmer feedback
-        CrComLib.subscribeState('n', '30', (val) => {
-            const slider = document.getElementById('dimLevelSlider');
-            if (slider) slider.value = val;
-            document.getElementById('dimValue').textContent = val;
-            document.getElementById('dimPercentage').textContent = val + '%';
-            updateDial(val);
-        });
-
-        // ==================== NEW: AC Feedback ====================
-        CrComLib.subscribeState('n', '40', (val) => {
-            const currentEl = document.getElementById('acCurrentTemp');
-            if (currentEl) currentEl.textContent = Math.round(val) + '°C';
-        });
-    }
-
-    function requestCurrentStatus() {
-        if (typeof CrComLib !== 'undefined') {
-            CrComLib.publishEvent('b', '99', true);
-            setTimeout(() => CrComLib.publishEvent('b', '99', false), 100);
-        }
-    }
-
-    function setupTopNavigation() {
-        CrComLib.publishEvent("b", "active_state_class_page9", true);
-    }
-
-    // Clock
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-    setInterval(tick, 15000);
-    tick();
-
-    // Page Load Handler
-    let loadedSubId = CrComLib.subscribeState('o', 'ch5-import-htmlsnippet:page9-import-page', (value) => {
-        if (value && value['loaded']) {
-            onInit();
-            setTimeout(() => CrComLib.unsubscribeState('o', 'ch5-import-htmlsnippet:page9-import-page', loadedSubId), 100);
-        }
-    });
-
-    return {};
-}})();
-
-
+})();

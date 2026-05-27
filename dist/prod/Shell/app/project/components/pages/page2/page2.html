@@ -50,7 +50,7 @@
           </div>
         </div>
 
-        <!-- Tab Navigation (now 4 widgets) -->
+        <!-- Tab Navigation -->
         <div class="tab-nav">
           <button class="tab-btn active" data-widget="lights" onclick="switchWidget('lights', this)">💡 Lights</button>
           <button class="tab-btn" data-widget="tv" onclick="switchWidget('tv', this)">📺 TV</button>
@@ -63,171 +63,251 @@
 
           <!-- ==================== LIGHTS WIDGET ==================== -->
           <div id="widget-lights" class="widget active">
+
+            <!-- Header -->
             <div class="sec-hdr">
-              <span class="sec-title">Devices</span>
-              <span class="sec-badge">4 online</span>
+              <span class="sec-title">Lighting Areas</span>
+              <span class="sec-badge" id="lightsOnCount">0 on</span>
             </div>
-            <div class="device-grid">
-              <div class="dcard d-active" id="tile-lights">
-                <div class="dico-wrap">💡</div>
-                <div class="dname">Lighting</div>
-                <div class="dmeta">1 device</div>
-                <div class="dtog-row">
-                  <span class="dtog-lbl" id="lbl-lights">ON</span>
-                  <label class="tog">
-                    <input type="checkbox" id="tog-lights" checked onchange="toggleTile('lights','d-active')">
-                    <span class="ttrack"></span>
-                  </label>
-                </div>
+
+            <!-- Global Presets -->
+            <div class="lights-global-bar">
+              <button class="lglobal-btn lglobal-on"    id="globalAllOn">💡 All On</button>
+              <button class="lglobal-btn lglobal-relax" id="globalRelax">🌅 Relax</button>
+              <button class="lglobal-btn lglobal-dim"   id="globalDim">⭐ Dim All</button>
+              <button class="lglobal-btn lglobal-off"   id="globalAllOff">🌙 All Off</button>
+            </div>
+
+            <!-- Area Cards Grid
+                 data-area   = unique key
+                 data-label  = display name
+                 data-icon   = emoji
+                 data-joins  = JSON {on, dim, relax, off} digital joins
+                 data-analog = analog send join (omit → no dimmer)
+                 data-fb     = analog feedback join
+            -->
+            <div class="area-grid" id="areaGrid">
+
+              <div class="area-card" id="ac-Living Room"
+                   data-area="Living Room" data-label="Living Room" data-icon="🛋️"
+                   data-joins='{"on":"10","dim":"11","relax":"12","off":"13"}'
+                   data-analog="31" data-fb="30"
+                   onclick="openAreaPanel(this)">
+                <div class="acard-ico">🛋️</div>
+                <div class="acard-name">Living Room</div>
+                <div class="acard-state" id="astate-Living Room">OFF</div>
+                <div class="acard-indicator" id="aind-Living Room"></div>
+              </div>
+
+              <div class="area-card" id="ac-Bathroom"
+                   data-area="Bathroom" data-label="Bathroom" data-icon=""
+                   data-joins='{"on":"14","dim":"15","relax":"16","off":"17"}'
+                   data-analog="32" data-fb="33"
+                   onclick="openAreaPanel(this)">
+                <div class="acard-ico"></div>
+                <div class="acard-name">Bathroom</div>
+                <div class="acard-state" id="astate-Bathroom">OFF</div>
+                <div class="acard-indicator" id="aind-Bathroom"></div>
+              </div>
+
+              <div class="area-card" id="ac-Dressing"
+                   data-area="Dressing" data-label="Dressing" data-icon=""
+                   data-joins='{"on":"18","dim":"19","relax":"20","off":"21"}'
+                   data-analog="34" data-fb="35"
+                   onclick="openAreaPanel(this)">
+                <div class="acard-ico"></div>
+                <div class="acard-name">Dressing</div>
+                <div class="acard-state" id="astate-Dressing">OFF</div>
+                <div class="acard-indicator" id="aind-Dressing"></div>
+              </div>
+
+              <div class="area-card" id="ac-Reading"
+                   data-area="Reading" data-label="Reading" data-icon=""
+                   data-joins='{"on":"22","dim":"23","relax":"24","off":"25"}'
+                   data-analog="36" data-fb="37"
+                   onclick="openAreaPanel(this)">
+                <div class="acard-ico"></div>
+                <div class="acard-name">Reading Light</div>
+                <div class="acard-state" id="astate-Reading">OFF</div>
+                <div class="acard-indicator" id="aind-Reading"></div>
+              </div>
+
+              
+            </div><!-- /area-grid -->
+
+            <!-- Debug -->
+          
+          </div><!-- /widget-lights -->
+
+
+          <!-- ==================== AREA DETAIL PANEL (Slide-up) ==================== -->
+          <div class="area-panel-overlay" id="areaPanelOverlay" onclick="closeAreaPanel()"></div>
+
+          <div class="area-panel" id="areaPanel">
+
+            <!-- Panel handle -->
+            <div class="panel-handle"></div>
+
+            <!-- Panel header -->
+            <div class="panel-hdr">
+              <div class="panel-ico" id="panelIco">💡</div>
+              <div>
+                <div class="panel-title" id="panelTitle">Living Room</div>
+                <div class="panel-sub" id="panelSub">Lighting Control</div>
+              </div>
+              <button class="panel-close" onclick="closeAreaPanel()">✕</button>
+            </div>
+
+            <!-- Status pill -->
+            <div class="panel-status-row">
+              <div class="spill sp-off" id="panelStatusPill">
+                <span class="sdot"></span>
+                <span id="panelStatusText">OFF</span>
               </div>
             </div>
 
-            <!-- Dimmer Control -->
-            <div class="dimmer-card">
+            <!-- 4 Preset Buttons -->
+            <div class="preset-grid">
+              <button class="preset-btn preset-on" id="panelBtnOn">
+                <span class="preset-ico">💡</span>
+                <span class="preset-lbl">All On</span>
+              </button>
+              <button class="preset-btn preset-dim" id="panelBtnDim">
+                <span class="preset-ico">⭐</span>
+                <span class="preset-lbl">Dim</span>
+              </button>
+              <button class="preset-btn preset-relax" id="panelBtnRelax">
+                <span class="preset-ico">🌅</span>
+                <span class="preset-lbl">Relax</span>
+              </button>
+              <button class="preset-btn preset-off" id="panelBtnOff">
+                <span class="preset-ico">🌙</span>
+                <span class="preset-lbl">All Off</span>
+              </button>
+            </div>
+
+            <!-- Dimmer Section (shown only if area has analog join) -->
+            <div class="panel-dimmer" id="panelDimmer">
               <div class="dimmer-top">
                 <span class="dico">🎚️</span>
-                <span class="dtitle">Dimmer Control</span>
+                <span class="dtitle">Dimmer</span>
                 <div class="dpct-wrap">
-                  <div class="dpct" id="dimValue">50</div>
-                  <div class="djoin">Analog Join 31</div>
+                  <div class="dpct" id="panelDimValue">50</div>
+                  <div class="djoin" id="panelDimJoin">Analog Join —</div>
                 </div>
               </div>
 
+              <!-- Arc dial -->
               <div class="dial-wrap">
                 <svg width="200" height="118" viewBox="0 0 200 118" style="overflow:visible">
                   <defs>
-                    <linearGradient id="dg" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <linearGradient id="pdg" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stop-color="#fbbf24"/>
                       <stop offset="100%" stop-color="#f59e0b"/>
                     </linearGradient>
-                    <filter id="yglow" x="-20%" y="-20%" width="140%" height="140%">
+                    <filter id="pyglow" x="-20%" y="-20%" width="140%" height="140%">
                       <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
                       <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
                     </filter>
                   </defs>
                   <path d="M 24 105 A 76 76 0 0 1 176 105" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="9" stroke-linecap="round"/>
-                  <path id="arc-fill" d="M 24 105 A 76 76 0 0 1 100.1 29" fill="none" stroke="url(#dg)" stroke-width="9" stroke-linecap="round" filter="url(#yglow)"/>
-                  <text x="100" y="82" font-family="JetBrains Mono, monospace" font-size="22" font-weight="700" fill="#fbbf24" text-anchor="middle" id="arc-label">50%</text>
+                  <path id="panel-arc-fill" d="M 24 105 A 76 76 0 0 1 100.1 29" fill="none" stroke="url(#pdg)" stroke-width="9" stroke-linecap="round" filter="url(#pyglow)"/>
+                  <text x="100" y="82" font-family="JetBrains Mono, monospace" font-size="22" font-weight="700" fill="#fbbf24" text-anchor="middle" id="panel-arc-label">50%</text>
                   <text x="100" y="100" font-family="Sora, sans-serif" font-size="10" fill="rgba(255,255,255,0.35)" text-anchor="middle">dim level</text>
                 </svg>
               </div>
 
-              <input type="range" class="dim-range" id="dimLevelSlider" min="0" max="100" value="50">
-              <div class="range-lbx"><span>0%</span><span>Join 31 → CP4</span><span>100%</span></div>
-              <p class="dim-hint">Feedback ← Analog Join 30 (CP4)</p>
-            </div>
+              <input type="range" class="dim-range" id="panelDimSlider" min="0" max="100" value="50">
+              <div class="range-lbx"><span>0%</span><span>Analog Join</span><span>100%</span></div>
+              <p class="dim-hint" id="panelDimHint">Feedback ← Analog Join —</p>
+            </div><!-- /panel-dimmer -->
 
-            <div class="quick-grid">
-              <button class="qbtn q-on" id="lightsOnBtn"><span class="qi">💡</span>All On</button>
-              <button class="qbtn q-off" id="lightsOffBtn"><span class="qi">🌙</span>All Off</button>
-              <button class="qbtn q-dim" id="lightsDimBtn"><span class="qi">⭐</span>Dim 50%</button>
-            </div>
-
-            <div class="status-row">
-              <div class="spill sp-off" id="statusPill">
-                <span class="sdot"></span>
-                <span id="lightingStatus">Lights: OFF</span>
-              </div>
-            </div>
-
-            <div class="debug-card">
-              <b>UI→CP4</b> · Analog <b>31</b> Dimmer · Digital <b>10</b> On / <b>11</b> Off / <b>12</b> Dim 50%<br>
-              <b>UI→CP4</b> · Analog <b>34</b> Volume · Digital <b>99</b> Status request<br>
-              <b>CP4→UI</b> · Analog <b>30</b> Dim FB · <b>32</b> Temp · <b>33</b> Vol
-            </div>
-          </div>
+          </div><!-- /area-panel -->
 
 
-
-
-
-
-
-
-                    <!-- ==================== TV WIDGET ==================== -->
+          <!-- ==================== TV WIDGET ==================== -->
           <div id="widget-tv" class="widget">
-          
+
             <div class="sec-hdr">
               <span class="sec-title">TV & Media Center</span>
               <span class="sec-badge">Connected</span>
             </div>
-          
+
             <!-- Quick Actions -->
             <div class="quick-grid">
               <button class="qbtn q-on" id="tvPowerBtn"><span class="qi">📺</span>Power</button>
               <button class="qbtn" id="tvNetflixBtn"><span class="qi">📼</span>Netflix</button>
               <button class="qbtn" id="tvHdmiBtn"><span class="qi">📡</span>HDMI 1</button>
             </div>
-          
-            <!-- ==================== SUB NAVIGATION (TV Controls ↔ Favorites) ==================== -->
+
+            <!-- SUB NAVIGATION (TV Controls ↔ Favorites) -->
             <div class="sub-tab-nav">
               <button class="sub-tab-btn active" data-subwidget="tv-controls" onclick="switchTVSubWidget('tv-controls', this)">TV Controls</button>
               <button class="sub-tab-btn" data-subwidget="tv-favorites" onclick="switchTVSubWidget('tv-favorites', this)">Favorites</button>
             </div>
-          
-            <!-- ==================== TV CONTROLS SUB-WIDGET ==================== -->
-            <!-- ==================== TV CONTROLS SUB-WIDGET ==================== -->
-<div id="tv-controls" class="tv-subwidget active">
-  
-  <div class="sec-hdr">
-    <span class="sec-title">TV Remote</span>
-  </div>
 
-  <!-- Power & Source -->
-  <div class="tv-header-controls">
-    <button id="tvPowerBtn2" class="tv-power-btn">⏻ Power</button>
-    <button id="tvSourceBtn" class="tv-source-btn">📺 Source</button>
-  </div>
+            <!-- TV CONTROLS SUB-WIDGET -->
+            <div id="tv-controls" class="tv-subwidget active">
 
-  <!-- Media Controls Grid (between Power and D-Pad) -->
-  <div class="media-controls-grid">
-    <button class="media-btn" id="tvVolUpBtn">🔊 Vol +</button>
-    <button class="media-btn" id="tvVolDownBtn">🔊 Vol -</button>
-    <button class="media-btn" id="tvMuteBtn">🔇 Mute</button>
-    <button class="media-btn" id="tvChUpBtn">📺 CH +</button>
-    <button class="media-btn" id="tvChDownBtn">📺 CH -</button>
-  </div>
+              <div class="sec-hdr">
+                <span class="sec-title">TV Remote</span>
+              </div>
 
-  <!-- D-Pad (Made Smaller) -->
-  <div class="dpad-container">
-    <button class="dpad-btn dpad-up" id="tvDpadUp">▲</button>
-    <button class="dpad-btn dpad-left" id="tvDpadLeft">◀</button>
-    <button class="dpad-btn dpad-center" id="tvDpadOk">OK</button>
-    <button class="dpad-btn dpad-right" id="tvDpadRight">▶</button>
-    <button class="dpad-btn dpad-down" id="tvDpadDown">▼</button>
-  </div>
+              <!-- Power & Source -->
+              <div class="tv-header-controls">
+                <button id="tvPowerBtn2" class="tv-power-btn">⏻ Power</button>
+                <button id="tvSourceBtn" class="tv-source-btn">📺 Source</button>
+              </div>
 
-  <!-- Numeric Keypad (4 Columns) -->
-  <div class="keypad">
-    <button class="keypad-btn" id="tvKey1">1</button>
-    <button class="keypad-btn" id="tvKey2">2</button>
-    <button class="keypad-btn" id="tvKey3">3</button>
-    <button class="keypad-btn" id="tvHome">Home</button>
+              <!-- Media Controls Grid -->
+              <div class="media-controls-grid">
+                <button class="media-btn" id="tvVolUpBtn">🔊 Vol +</button>
+                <button class="media-btn" id="tvVolDownBtn">🔊 Vol -</button>
+                <button class="media-btn" id="tvMuteBtn">🔇 Mute</button>
+                <button class="media-btn" id="tvChUpBtn">📺 CH +</button>
+                <button class="media-btn" id="tvChDownBtn">📺 CH -</button>
+              </div>
 
-    <button class="keypad-btn" id="tvKey4">4</button>
-    <button class="keypad-btn" id="tvKey5">5</button>
-    <button class="keypad-btn" id="tvKey6">6</button>
-    <button class="keypad-btn" id="tvMenu">Menu</button>
+              <!-- D-Pad -->
+              <div class="dpad-container">
+                <button class="dpad-btn dpad-up" id="tvDpadUp">▲</button>
+                <button class="dpad-btn dpad-left" id="tvDpadLeft">◀</button>
+                <button class="dpad-btn dpad-center" id="tvDpadOk">OK</button>
+                <button class="dpad-btn dpad-right" id="tvDpadRight">▶</button>
+                <button class="dpad-btn dpad-down" id="tvDpadDown">▼</button>
+              </div>
 
-    <button class="keypad-btn" id="tvKey7">7</button>
-    <button class="keypad-btn" id="tvKey8">8</button>
-    <button class="keypad-btn" id="tvKey9">9</button>
-    <button class="keypad-btn" id="tvChList">CHlist</button>
+              <!-- Numeric Keypad -->
+              <div class="keypad">
+                <button class="keypad-btn" id="tvKey1">1</button>
+                <button class="keypad-btn" id="tvKey2">2</button>
+                <button class="keypad-btn" id="tvKey3">3</button>
+                <button class="keypad-btn" id="tvHome">Home</button>
 
-    <button class="keypad-btn" id="tvKey0">0</button>
-    <button class="keypad-btn" id="tvKeyEnter">Enter</button>
-    <button class="keypad-btn" id="tvBack">Back</button>
-  </div>
+                <button class="keypad-btn" id="tvKey4">4</button>
+                <button class="keypad-btn" id="tvKey5">5</button>
+                <button class="keypad-btn" id="tvKey6">6</button>
+                <button class="keypad-btn" id="tvMenu">Menu</button>
 
-</div>
-            <!-- ==================== FAVORITES SUB-WIDGET ==================== -->
+                <button class="keypad-btn" id="tvKey7">7</button>
+                <button class="keypad-btn" id="tvKey8">8</button>
+                <button class="keypad-btn" id="tvKey9">9</button>
+                <button class="keypad-btn" id="tvChList">CHlist</button>
+
+                <button class="keypad-btn" id="tvKey0">0</button>
+                <button class="keypad-btn" id="tvKeyEnter">Enter</button>
+                <button class="keypad-btn" id="tvBack">Back</button>
+              </div>
+
+            </div>
+
+            <!-- FAVORITES SUB-WIDGET -->
             <div id="tv-favorites" class="tv-subwidget">
               <div class="sec-hdr">
                 <span class="sec-title">Favorites</span>
               </div>
 
               <div class="favorites-grid">
-                <!-- You can add up to 20 favorite buttons here (4x5) -->
                 <button class="fav-btn">Netflix</button>
                 <button class="fav-btn">YouTube</button>
                 <button class="fav-btn">Disney+</button>
@@ -238,13 +318,12 @@
                 <button class="fav-btn">BBC</button>
                 <button class="fav-btn">Sky News</button>
                 <button class="fav-btn">Al Jazeera</button>
-                <!-- Add more as needed -->
               </div>
             </div>
-          
+
           </div>
 
-            
+
           <!-- ==================== SHADES WIDGET ==================== -->
           <div id="widget-shades" class="widget">
             <div class="sec-hdr">
@@ -274,7 +353,8 @@
             </div>
           </div>
 
-          <!-- ==================== NEW: AC WIDGET (Full Control) ==================== -->
+
+          <!-- ==================== AC WIDGET ==================== -->
           <div id="widget-ac" class="widget">
             <div class="sec-hdr">
               <span class="sec-title">Air Conditioning</span>
@@ -297,7 +377,7 @@
               </div>
             </div>
 
-            <!-- Temperature Control (matches dimmer-card design, no dial needed for temp) -->
+            <!-- Temperature Control -->
             <div class="dimmer-card">
               <div class="dimmer-top">
                 <span class="dico">🌡️</span>
@@ -345,12 +425,7 @@
               <button class="qbtn" id="acSwingBtn"><span class="qi">↕️</span>Swing Toggle</button>
             </div>
 
-            <div class="debug-card">
-              <b>UI→CP4 AC</b> · Analog <b>41</b> Set Temp · Digital <b>70</b> Power<br>
-              Modes: <b>71</b>Cool <b>72</b>Heat <b>73</b>Auto <b>74</b>Dry <b>75</b>Fan<br>
-              Fan: <b>76</b>Low <b>77</b>Med <b>78</b>High <b>79</b>Auto · <b>81</b>Swing<br>
-              <b>CP4→UI</b> · Analog <b>40</b> Room Temp FB
-            </div>
+           
           </div>
 
         </div>

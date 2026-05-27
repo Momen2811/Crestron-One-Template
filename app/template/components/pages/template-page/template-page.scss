@@ -553,6 +553,7 @@ $bar-8k: 5px;
     scrollbar-width: thin;
     scrollbar-color: rgba(79, 142, 247, 0.3) transparent;
     
+    
 
 
     &::-webkit-scrollbar {
@@ -569,7 +570,7 @@ $bar-8k: 5px;
   // ===========================================================
   .list-item {
     flex: 0 0 auto;                        // ← Important: prevents shrinking
-    min-width: 68px;                       // Minimum width per item
+                           // Minimum width per item
     width: auto;
 
     .horizontal-list-item {
@@ -588,7 +589,7 @@ $bar-8k: 5px;
         border: 0;
         border-radius: 0;
         background: transparent !important;
-        width: 100%;
+        width: 150px;
         height: $footer-height-sm;
         display: flex;
         flex-direction: column;
@@ -678,10 +679,12 @@ $bar-8k: 5px;
     .ch5-button--label { font-size: $label-xs; }
   }
 
-  @media (min-width: 576px) and (max-width: 991px) {
+  @media (min-width: 576px) {
     .list-item .horizontal-list-item { min-height: $footer-height-md; }
     .ch5-button { height: $footer-height-md; }
     .ch5-button--label { font-size: $label-md; }
+    .list-item {min-width: 10px; }
+
   }
 
   // ... (you can keep the rest of your breakpoints as they were)

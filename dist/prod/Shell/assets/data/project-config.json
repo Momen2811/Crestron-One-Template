@@ -89,7 +89,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 2,
-          "label": "Living Room",
+          "label": "First Living",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -111,7 +111,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 3,
-          "label": "Reception",
+          "label": "Omar",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -133,7 +133,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 4,
-          "label": "page4",
+          "label": "Hassan",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -155,7 +155,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 5,
-          "label": "page5",
+          "label": "Layla",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -177,7 +177,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 6,
-          "label": "page6",
+          "label": "Reception",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -199,7 +199,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 7,
-          "label": "page7",
+          "label": "Basement",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -221,7 +221,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 8,
-          "label": "page8",
+          "label": "Kitchen",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -243,29 +243,7 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 9,
-          "label": "page9",
-          "isI18nLabel": false,
-          "iconClass": "fas fa-file-alt",
-          "iconUrl": "",
-          "iconPosition": "bottom"
-        },
-        "animation": {
-          "transitionIn": "",
-          "transitionOut": "",
-          "transitionDuration": "1s",
-          "transitionDelay": "0s"
-        }
-      },
-      {
-        "pageName": "page10",
-        "fullPath": "./app/project/components/pages/page10/",
-        "fileName": "page10.html",
-        "preloadPage": false,
-        "cachePage": false,
-        "standAloneView": false,
-        "navigation": {
-          "sequence": 10,
-          "label": "page10",
+          "label": "All Outdoor",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",

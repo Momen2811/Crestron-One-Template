@@ -171,6 +171,23 @@ function getEntry() {
 module.exports = (env) => {
   return {
     entry: getEntry(),
+    optimization: {
+  splitChunks: {
+    chunks: 'all',
+    cacheGroups: {
+      vendor: {
+        test: /[\\/]node_modules[\\/]/,
+        name: 'vendors',
+        priority: 10
+      },
+      common: {
+        minChunks: 2,
+        priority: 5,
+        reuseExistingChunk: true
+      }
+    }
+  }
+},
     output: {
       filename: "[name].[contenthash].js",
       path: path.resolve(basePath, appConfigDistPath[env]),
