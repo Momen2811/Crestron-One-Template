@@ -1527,11 +1527,13 @@ var webXPanelModule = (function () {
   const config = {
     "host": window.location.hostname,
     "port": 49200,
-    "roomId": "",
-    "ipId": "0x03",
+    "roomId": "room-01",
+    "ipId": "0x06",
     "tokenSource": "",
     "tokenUrl": "",
-    "authToken": ""
+    "authToken": "",
+    "username": "admin",
+    "password": "Ciscoagain1"
   };
 
   const RENDER_STATUS = {
@@ -1733,13 +1735,38 @@ var webXPanelModule = (function () {
 
 
   /**
+   * Fetch a bearer token from the CP4 REST API using username/password.
+   * Returns a Promise that resolves to the token string, or null on failure.
+   * Failure is expected (and silent) when the browser blocks cross-origin requests
+   * to a local IP — the normal auth dialog will appear as fallback.
+   */
+  function fetchCrestronToken(host, username, password) {
+    var endpoint = 'https://' + host + '/cws/api/v1/authentication/token';
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        return d.token || d.authToken || d.access_token || null;
+      })
+      .catch(function (err) {
+        console.warn('[WebXPanel] auto-auth skipped (' + err.message + ') — manual login will appear');
+        return null;
+      });
+  }
+
+  /**
    * Connect to the control system through websocket connection.
    * Show the status in the header bar using CSS animation.
    * @param {object} projectConfig
    */
   function connectWebXPanel(projectConfig) {
     connectParams = config;
-    // status = document.querySelector('#webxpanel-tab-content .connection .status');
 
     webXPanelConnectionStatus();
     // Merge the configuration params, params of the URL takes precedence
@@ -1749,25 +1776,43 @@ var webXPanelModule = (function () {
     // Assign the combined configuration
     connectParams = urlConfig;
 
-    WebXPanel.default.initialize(connectParams);
+    function doInit() {
+      WebXPanel.default.initialize(connectParams);
 
-    updateInfoStatus("app.webxpanel.status.CONNECT_WS");
+      updateInfoStatus("app.webxpanel.status.CONNECT_WS");
 
-    const cs = document.querySelector('#webxpanel-tab-content .connection .cs');
-    const ipId = document.querySelector('#webxpanel-tab-content .connection .ipid');
-    const roomId = document.querySelector('#webxpanel-tab-content .connection .roomid');
-    if (connectParams.host !== "") {
-      cs.textContent = `CS: wss://${connectParams.host}:${connectParams.port}`;
-    }
-    if (connectParams.ipId !== "") {
-      ipId.textContent = `IPID: ${Number(connectParams.ipId).toString(16)}`;
-    }
-    if (connectParams.roomId !== "") {
-      roomId.textContent = `Room Id: ${connectParams.roomId}`;
+      const cs = document.querySelector('#webxpanel-tab-content .connection .cs');
+      const ipId = document.querySelector('#webxpanel-tab-content .connection .ipid');
+      const roomId = document.querySelector('#webxpanel-tab-content .connection .roomid');
+      if (connectParams.host !== "") {
+        cs.textContent = `CS: wss://${connectParams.host}:${connectParams.port}`;
+      }
+      if (connectParams.ipId !== "") {
+        ipId.textContent = `IPID: ${Number(connectParams.ipId).toString(16)}`;
+      }
+      if (connectParams.roomId !== "") {
+        roomId.textContent = `Room Id: ${connectParams.roomId}`;
+      }
+
+      // WebXPanel listeners are called in the below method
+      setWebXPanelListeners();
     }
 
-    // WebXPanel listeners are called in the below method
-    setWebXPanelListeners();
+    // Auto-authenticate: if credentials are configured and no token is already set,
+    // fetch a token from the CP4 REST API before initializing the WebXPanel connection.
+    var u = connectParams.username;
+    var p = connectParams.password;
+    if (u && p && !connectParams.authToken) {
+      fetchCrestronToken(connectParams.host, u, p).then(function (token) {
+        if (token) {
+          connectParams.authToken = token;
+          console.log('[WebXPanel] auto-auth succeeded — connecting with token');
+        }
+        doInit();
+      });
+    } else {
+      doInit();
+    }
   }
 
   /**
@@ -3679,40 +3724,1116 @@ const templateVersionInfoModule = (() => {
 		componentCount,
 		logSubscriptionsCount
 	};
-})();/* page1.js — Smart Home Control (4 Widgets)
- * v5 changes (pill card + long-press):
- *   - Area cards are now horizontal PILLS: circular lamp button on the
- *     left, room name on the right.
- *   - The lamp icon IS the ON/OFF toggle. Tapping it pulses the 'on' or
- *     'off' preset and flips the amber-glow visual state. It stays in
- *     sync with preset buttons and feedback from CP4.
- *   - HOLDING the card body for LONG_PRESS_MS ms opens the detail popup
- *     (default 2000ms). Taps on the lamp don't trigger the long-press;
- *     moving the finger > 10px or releasing early cancels it. A blue
- *     progress fill sweeps across the card during the hold (CSS).
+})();/* ============================================================================
+ * home.js  —  Home Hub (landing page) logic
+ * ============================================================================
  *
- * v4 (kept):
- *   - Preset system is CATALOG-DRIVEN via window.LIGHT_PRESETS and each
- *     card's data-presets + data-join-<key> attributes.
- *   - 13 preset keys supported by default (on/off/dim/relax/tv/guest/
- *     service/p10..p15). Popup builds buttons dynamically per room.
+ * Wires up:
+ *   • Time-aware salutation + live clock + date
+ *   • House Modes buttons (pulse JHOME.HOUSE_MODES.*)
+ *   • Room cards (navigate via navigationModule.goToPage('pageN'))
+ *   • Connection indicator (flips conn--ok / conn--bad off CrComLib state)
  *
- * v3 (kept):
- *   - Popup is a SHARED modal, position:fixed, centered in the current
- *     viewport. Portaled to <body> on first open to survive CH5
- *     ancestor transforms.
+ * Joins live in joins-home.js (window.JHOME). Loaded BEFORE this file.
+ *
+ * EXPOSED GLOBALS (so inline onclick="…" works):
+ *   window.hubMode(modeKey, btnEl)   — pulse a house-mode join
+ *   window.hubGoRoom(pageName)       — navigate to a room
+ * ============================================================================ */
+
+const homeModule = (() => {
+    'use strict';
+
+    const HUB_ROOT = () => document.getElementById('home-page') || document;
+    const _gid     = (id)  => document.getElementById(id);
+    const _qsa     = (sel) => HUB_ROOT().querySelectorAll(sel);
+
+    // Resolve the join map LAZILY. Every page script is concatenated into a
+    // single component.js, and home.js sorts BEFORE joins-home.js (h < j) —
+    // so window.JHOME does not exist yet when this IIFE first runs. Capturing
+    // it now would freeze J to null and every pulse would silently no-op.
+    // Reading window.JHOME at call time (button tap / init) guarantees
+    // joins-home.js has already run.
+    const J = () => (typeof window !== 'undefined' ? window.JHOME : null);
+
+    // ────────────── CrComLib safe helpers (stub when running in dev browser) ──
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('b', join, true);
+        setTimeout(() => CrComLib.publishEvent('b', join, false), ms);
+    }
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, String(text));
+    }
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ─── Inline-onclick bridge (mirrors the pattern in page1.js) ───────────
+     * Lets inline HTML wire any button to a JHOME path with one line:
+     *   <button onclick="tap_home('HOUSE_MODES.PARTY')">…</button>
+     * Useful if you add buttons to home.html later. */
+    function _resolve(joinPath) {
+        const map = J();
+        if (typeof joinPath !== 'string' || !joinPath || !map) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), map);
+    }
+    window.tap_home = function (joinPath, ms) {
+        const j = _resolve(joinPath);
+        if (!j) { console.warn('[tap_home] no join for', joinPath); return; }
+        pulse(j, typeof ms === 'number' ? ms : 100);
+    };
+
+    // ────────────── House Modes ──────────────────────────────────────────────
+    // Map data-mode → JHOME.HOUSE_MODES.<KEY>
+    const MODE_KEY = {
+        morning: 'MORNING', guest: 'GUEST', night: 'NIGHT',
+        away: 'AWAY',       party: 'PARTY', relax: 'RELAX'
+    };
+    // Metadata for the confirmation popup — icon, readable label, description, accent colour.
+    const MODE_META = {
+        morning: { label: 'Morning Mode', icon: '🌅', msg: 'Adjust all systems for a bright, energetic start to your day.',   rgb: '251, 191, 36'  },
+        guest:   { label: 'Guest Mode',   icon: '👥', msg: 'Prepare the home for a comfortable guest experience.',             rgb: '45, 212, 191'  },
+        night:   { label: 'Night Mode',   icon: '🌙', msg: 'Dim lights and set a quiet, sleep-friendly atmosphere.',            rgb: '79, 142, 247'  },
+        away:    { label: 'Away Mode',    icon: '🏠', msg: 'Secure the home and optimise energy while you are away.',          rgb: '249, 107, 107' },
+        party:   { label: 'Party Mode',   icon: '🎉', msg: 'Set the mood for entertaining — lights, music, and ambiance.',     rgb: '167, 139, 250' },
+        relax:   { label: 'Relax Mode',   icon: '🛋️', msg: 'Create a calm, cosy atmosphere for winding down.',                 rgb: '251, 146, 60'  }
+    };
+
+    let _modeDialogEls = null;
+    let _modeDialogCb  = null;
+
+    function buildModeConfirmDialog() {
+        if (_modeDialogEls) return _modeDialogEls;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'hmc-overlay';
+
+        const wrap = document.createElement('div');
+        wrap.className = 'hmc-dialog';
+        wrap.setAttribute('role', 'alertdialog');
+        wrap.setAttribute('aria-modal', 'true');
+
+        const inner = document.createElement('div');
+        inner.className = 'hmc-dialog-inner';
+        inner.innerHTML =
+            '<span class="hmc-icon"></span>' +
+            '<div class="hmc-title"></div>' +
+            '<div class="hmc-msg"></div>' +
+            '<div class="hmc-actions">' +
+              '<button type="button" class="hmc-btn hmc-btn-cancel">Cancel</button>' +
+              '<button type="button" class="hmc-btn hmc-btn-confirm">Activate</button>' +
+            '</div>';
+        wrap.appendChild(inner);
+        document.body.appendChild(overlay);
+        document.body.appendChild(wrap);
+
+        const close = () => {
+            overlay.classList.remove('open');
+            wrap.classList.remove('open');
+            _modeDialogCb = null;
+        };
+        inner.querySelector('.hmc-btn-cancel').addEventListener('click', close);
+        inner.querySelector('.hmc-btn-confirm').addEventListener('click', () => {
+            if (typeof _modeDialogCb === 'function') _modeDialogCb();
+            close();
+        });
+        overlay.addEventListener('click', close);
+        // .hmc-dialog covers the full viewport with pointer-events:all while open,
+        // so clicks on the dimmed background actually land on it, not on .hmc-overlay.
+        // Close when the click target is the wrap itself (i.e. the empty flex area
+        // around .hmc-dialog-inner, not a click that bubbled up from the card body).
+        wrap.addEventListener('click', (e) => {
+            if (e.target === wrap) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && wrap.classList.contains('open')) close();
+        });
+
+        _modeDialogEls = { overlay, wrap, inner, close };
+        return _modeDialogEls;
+    }
+
+    window.hubMode = function (modeKey, btnEl) {
+        const key  = MODE_KEY[modeKey];
+        if (!key) { console.warn('[hubMode] unknown mode:', modeKey); return; }
+
+        const meta = MODE_META[modeKey] || { label: modeKey, icon: '🏠', msg: '', rgb: '167, 139, 250' };
+        const els  = buildModeConfirmDialog();
+        const inner = els.inner;
+
+        inner.style.setProperty('--hmc-rgb', meta.rgb);
+        inner.querySelector('.hmc-icon').textContent  = meta.icon;
+        inner.querySelector('.hmc-title').textContent = 'Activate ' + meta.label + '?';
+        inner.querySelector('.hmc-msg').textContent   = meta.msg;
+
+        _modeDialogCb = () => {
+            const map  = J();
+            const join = map && map.HOUSE_MODES && map.HOUSE_MODES[key];
+            pulse(join);
+            if (btnEl && btnEl.classList) {
+                btnEl.classList.remove('hub-mode-pulsed');
+                void btnEl.offsetWidth;
+                btnEl.classList.add('hub-mode-pulsed');
+            }
+        };
+
+        els.overlay.classList.add('open');
+        els.wrap.classList.add('open');
+    };
+
+    // ────────────── Sensors popup (Sensors On / Sensors Off) ─────────────────
+    // The "Sensors" card on the hub opens this dialog. Each button pulses
+    // one of the JHOME.SENSORS digital joins (ON / OFF) and closes.
+    // Dialog is built once lazily and portaled to <body> so position:fixed
+    // escapes the ch5-import-htmlsnippet transform context.
+    let _sensorsDialogEls = null;
+
+    function buildSensorsDialog() {
+        if (_sensorsDialogEls) return _sensorsDialogEls;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'hmc-overlay';
+
+        const wrap = document.createElement('div');
+        wrap.className = 'hmc-dialog';
+        wrap.setAttribute('role', 'alertdialog');
+        wrap.setAttribute('aria-modal', 'true');
+
+        const inner = document.createElement('div');
+        inner.className = 'hmc-dialog-inner';
+        // Reuses the .hmc-* classes from the mode dialog for visual parity.
+        // The two action buttons drop the Cancel/Activate semantics — they
+        // are themselves the two actions.
+        inner.innerHTML =
+            '<span class="hmc-icon">📡</span>' +
+            '<div class="hmc-title">Sensors</div>' +
+            '<div class="hmc-msg">Turn the house sensors on or off.</div>' +
+            '<div class="hmc-actions">' +
+              '<button type="button" class="hmc-btn hmc-btn-cancel"  data-act="off">Sensors Off</button>' +
+              '<button type="button" class="hmc-btn hmc-btn-confirm" data-act="on">Sensors On</button>' +
+            '</div>';
+        // Purple tint for the icon-ring (same token the AWAY/PARTY modes use).
+        inner.style.setProperty('--hmc-rgb', '167, 139, 250');
+
+        wrap.appendChild(inner);
+        document.body.appendChild(overlay);
+        document.body.appendChild(wrap);
+
+        const close = () => {
+            overlay.classList.remove('open');
+            wrap.classList.remove('open');
+        };
+
+        // ON / OFF — pulse the matching SENSORS join (resolved LAZILY,
+        // see comment on `J` at the top of this file).
+        inner.querySelector('[data-act="on"]').addEventListener('click', () => {
+            const map  = J();
+            const join = map && map.SENSORS && map.SENSORS.ON;
+            if (join) pulse(join);
+            else      console.warn('[hubSensors] no join for SENSORS.ON');
+            close();
+        });
+        inner.querySelector('[data-act="off"]').addEventListener('click', () => {
+            const map  = J();
+            const join = map && map.SENSORS && map.SENSORS.OFF;
+            if (join) pulse(join);
+            else      console.warn('[hubSensors] no join for SENSORS.OFF');
+            close();
+        });
+        overlay.addEventListener('click', close);
+        // See note in buildModeConfirmDialog — .hmc-dialog sits on top of
+        // .hmc-overlay and eats clicks on the dimmed area, so we also need
+        // a close handler here, scoped to clicks on the wrap itself.
+        wrap.addEventListener('click', (e) => {
+            if (e.target === wrap) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && wrap.classList.contains('open')) close();
+        });
+
+        _sensorsDialogEls = { overlay, wrap, inner, close };
+        return _sensorsDialogEls;
+    }
+
+    // Exposed for the inline onclick="hubSensors(this)" on the Sensors card.
+    window.hubSensors = function (btnEl) {
+        const els = buildSensorsDialog();
+        els.overlay.classList.add('open');
+        els.wrap.classList.add('open');
+        // Same just-pulsed flash as the mode buttons get.
+        if (btnEl && btnEl.classList) {
+            btnEl.classList.remove('hub-mode-pulsed');
+            void btnEl.offsetWidth;
+            btnEl.classList.add('hub-mode-pulsed');
+        }
+    };
+
+    /* Master "shutdown all rooms" exposed as a single global so every
+     * room page's topbar shutdown button can call it without each
+     * page<N>.js needing its own copy. Home preloads, so window.shutdownAll
+     * is always defined before any room page is shown.
+     *
+     * Pulses JHOME.SHUTDOWN.ALL_SYSTEMS only after the user confirms in a
+     * Yes/No dialog. The dialog is built once (lazily) and appended to
+     * <body> so position:fixed escapes the ch5-import-htmlsnippet's
+     * transform context — the same trick the old area-shutdown popup used. */
+    let _confirmEls = null;
+    let _pendingShutdownJoin = null;
+    let _pendingShutdownShutterJoin = null;
+    function buildConfirmDialog() {
+        if (_confirmEls) return _confirmEls;
+        const overlay = document.createElement('div');
+        overlay.className = 'ash-overlay';
+        const dialog = document.createElement('div');
+        dialog.className = 'ash-dialog';
+        dialog.setAttribute('role', 'alertdialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.innerHTML =
+            '<div class="ash-icon">⏻</div>' +
+            '<div class="ash-title">Shutdown All Rooms?</div>' +
+            '<div class="ash-msg">Every system in every room will be turned off.</div>' +
+            '<div class="ash-actions">' +
+              '<div class="ash-yes-row">' +
+                '<button type="button" class="ash-btn ash-btn-yes-shutter"> Yes, with Shutter</button>' +
+                '<button type="button" class="ash-btn ash-btn-yes">Yes, without Shutter</button>' +
+              '</div>' +
+              '<button type="button" class="ash-btn ash-btn-no">No, Not Now</button>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+
+        const btnNo          = dialog.querySelector('.ash-btn-no');
+        const btnYes         = dialog.querySelector('.ash-btn-yes');
+        const btnYesShutter  = dialog.querySelector('.ash-btn-yes-shutter');
+        const close = () => {
+            overlay.classList.remove('open');
+            dialog.classList.remove('open');
+            _pendingShutdownJoin = null;
+            _pendingShutdownShutterJoin = null;
+        };
+
+        overlay.addEventListener('click', close);
+        btnNo.addEventListener('click', close);
+        btnYes.addEventListener('click', () => {
+            if (_pendingShutdownJoin) pulse(_pendingShutdownJoin);
+            else console.warn('[shutdownAll] No shutdown join configured for this page');
+            close();
+        });
+        btnYesShutter.addEventListener('click', () => {
+            if (_pendingShutdownShutterJoin) pulse(_pendingShutdownShutterJoin);
+            else console.warn('[shutdownAll] No shutdown-with-shutter join configured for this page');
+            close();
+        });
+        // Escape closes the dialog without firing.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && dialog.classList.contains('open')) close();
+        });
+
+        _confirmEls = { overlay, dialog, close };
+        return _confirmEls;
+    }
+    window.shutdownAll = function (join, shutterJoin) {
+        _pendingShutdownJoin        = join        || null;
+        _pendingShutdownShutterJoin = shutterJoin || null;
+        const els = buildConfirmDialog();
+
+        // Adapt the dialog to whether a shutter join was supplied.
+        //   • With shutter    → 3 buttons: "Yes, with Shutter" /
+        //                                  "Yes, without Shutter" / "No, Not Now"
+        //   • Without shutter → 2 buttons: "Yes, Shutdown" / "No, Not Now"
+        // Pages that don't have a shutter pulse just omit the 2nd arg in their
+        // onclick, e.g. shutdownAll(J8.SYSTEM.SHUTDOWN).
+        const dialog     = els.dialog;
+        const btnShutter = dialog.querySelector('.ash-btn-yes-shutter');
+        const btnYes     = dialog.querySelector('.ash-btn-yes');
+        const hasShutter = !!_pendingShutdownShutterJoin;
+        if (btnShutter) btnShutter.style.display = hasShutter ? '' : 'none';
+        if (btnYes)     btnYes.textContent       = hasShutter ? 'Yes, without Shutter' : 'Yes, Shutdown';
+
+        els.overlay.classList.add('open');
+        els.dialog .classList.add('open');
+    };
+
+    // ────────────── House Modes — feedback subscriptions ─────────────────────
+    // Subscribe to each mode join. SIMPL holds the same join HIGH while the
+    // mode is active, so hub-mode-active is toggled on/off in real time.
+    function setupModeFeedback() {
+        if (!hasCrestron()) return;
+        const modes = J() && J().HOUSE_MODES;
+        Object.entries(MODE_KEY).forEach(([modeKey, joinKey]) => {
+            const join = modes && modes[joinKey];
+            if (!join) return;
+            const btn = HUB_ROOT().querySelector('[data-mode="' + modeKey + '"]');
+            if (!btn) return;
+            subBool(join, (val) => { btn.classList.toggle('hub-mode-active', !!val); });
+        });
+    }
+
+    // ────────────── House Functions  (per-floor on/off) ─────────────────────
+    // floor ∈ {first, ground, basement}
+    // sys   ∈ {lights, ac, shades}
+    // act   ∈ {on, off}
+    // Build the JHOME.HOUSE_FUNCTIONS key, e.g. ('first','lights','on') → 'FIRST_LIGHTS_ON'.
+    window.hubFunc = function (floor, sys, act) {
+        const key  = (floor + '_' + sys + '_' + act).toUpperCase();
+        const map  = J();
+        const join = map && map.HOUSE_FUNCTIONS && map.HOUSE_FUNCTIONS[key];
+        if (!join) { console.warn('[hubFunc] no join for', key); return; }
+        pulse(join);
+    };
+
+    // ────────────── Shutdown House  (per-floor + whole-house + master) ───────
+    // floor ∈ {first, ground, basement, all}
+    // sys   ∈ {lights, av, shades, ac, all}
+    // ('all','all') → master kill (JHOME.SHUTDOWN.ALL_SYSTEMS)
+    // ('all','<sys>') → JHOME.SHUTDOWN.ALL_<SYS>
+    // ('<floor>','<sys>') → JHOME.SHUTDOWN.<FLOOR>_<SYS>
+    window.hubShutdown = function (floor, sys) {
+        const key  = (floor === 'all' && sys === 'all')
+            ? 'ALL_SYSTEMS'
+            : (floor + '_' + sys).toUpperCase();
+        const map  = J();
+        const join = map && map.SHUTDOWN && map.SHUTDOWN[key];
+        if (!join) { console.warn('[hubShutdown] no join for', key); return; }
+        pulse(join);
+    };
+
+    // ────────────── Room navigation ──────────────────────────────────────────
+    // The shell exposes two coordinated APIs we need to mirror — both are
+    // declared as top-level `const` in the shell scripts (lexical script
+    // scope, NOT on `window`), so we access them as bare identifiers via
+    // typeof guards (typeof on an undeclared name is the only safe check).
+    //
+    //   1. ch5-triggerview.setActiveView(index)  → visually swaps the page
+    //   2. navigationModule.goToPage(pageName)   → handles load + cache + diags
+    //
+    // The shell's footer does BOTH (template-page.js:89 + :109) — so we do
+    // the same here, in the same order.
+    window.hubGoRoom = function (pageName) {
+        if (!pageName) return;
+
+        // Optional hook: tell CP4 which room is being entered. Useful for
+        // SIMPL logic like "auto-play room music on entry".
+        const sysMap = J() && J().SYSTEM;
+        if (sysMap && sysMap.ACTIVE_PAGE) {
+            sendSerial(sysMap.ACTIVE_PAGE, pageName);
+        }
+
+        // 1) Resolve index from the live nav-page list. This survives
+        //    reordering pages in project-config.json — never hardcode.
+        let activeIndex = -1;
+        try {
+            if (typeof projectConfigModule !== 'undefined' &&
+                typeof projectConfigModule.getNavigationPages === 'function') {
+                const navPages = projectConfigModule.getNavigationPages();
+                for (let i = 0; i < navPages.length; i++) {
+                    if (navPages[i].pageName === pageName) { activeIndex = i; break; }
+                }
+            }
+        } catch (e) { console.warn('[hubGoRoom] could not resolve index:', e); }
+
+        // 2) Swap the visible view. .triggerview matches the active one
+        //    (horizontal / vertical / none — only one is rendered).
+        if (activeIndex >= 0) {
+            const tv = document.querySelector('.triggerview') ||
+                       document.querySelector('ch5-triggerview');
+            try { tv && tv.setActiveView(activeIndex); }
+            catch (e) { console.warn('[hubGoRoom] setActiveView failed:', e); }
+        }
+
+        // 3) Fire the shell's full goToPage flow (loading indicator, cache
+        //    handling, diagnostics, page-show events). Bare identifier
+        //    because navigationModule is `const`, not on window.
+        try {
+            if (typeof navigationModule !== 'undefined' &&
+                typeof navigationModule.goToPage === 'function') {
+                navigationModule.goToPage(pageName);
+                return;
+            }
+        } catch (e) { console.error('[hubGoRoom] navigationModule.goToPage failed:', e); }
+
+        if (activeIndex < 0) {
+            console.warn('[hubGoRoom] page not found in navigation list:', pageName);
+        }
+    };
+
+    // ────────────── Connection indicator ─────────────────────────────────────
+    function setConn(state /* 'ok' | 'warn' | 'bad' */, label) {
+        const el = _gid('connStatus-home');
+        if (!el) return;
+        el.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+        el.classList.add('conn--' + state);
+        const lbl = el.querySelector('.conn-label');
+        if (lbl) lbl.textContent = label || (state === 'ok' ? 'Online' :
+                                             state === 'warn' ? 'Reconnecting' : 'Offline');
+    }
+
+    /* Heartbeat-driven connection indicator.
+     *  CP4 must TOGGLE JHOME.SYSTEM.HEARTBEAT every ~2 s. We watch the
+     *  time since the last edge and flip the .conn pill:
+     *    < 5 s   → ok    (Online)
+     *    5-12 s  → warn  (Reconnecting)
+     *    > 12 s  → bad   (Offline)
+     *  No heartbeat join → keep optimistic Online forever (legacy mode). */
+    let _lastHeartbeat = 0;
+    let _heartbeatTicker = null;
+    function bindConnState() {
+        if (!hasCrestron()) {
+            setConn('warn', 'Local Preview');
+            return;
+        }
+        const hb = J() && J().SYSTEM && J().SYSTEM.HEARTBEAT;
+        if (!hb) { setConn('ok', 'Online'); return; }
+
+        _lastHeartbeat = Date.now();
+        subBool(hb, () => { _lastHeartbeat = Date.now(); });
+
+        // Tick every 1 s — cheap, predictable.
+        if (_heartbeatTicker) clearInterval(_heartbeatTicker);
+        _heartbeatTicker = setInterval(() => {
+            const age = (Date.now() - _lastHeartbeat) / 1000;
+            if      (age < 5)  setConn('ok',   'Online');
+            else if (age < 12) setConn('warn', 'Reconnecting');
+            else               setConn('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ────────────── Time / date / salutation ─────────────────────────────────
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+    function tickClock() {
+        const now   = new Date();
+        const hour  = now.getHours();
+        const min   = now.getMinutes();
+        const time  = pad(hour) + ':' + pad(min);
+
+        const dayName   = now.toLocaleDateString(undefined, { weekday: 'long' });
+        const dateLong  = now.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+        const yearShort = now.getFullYear();
+        const dateText  = dayName + ' · ' + dateLong + ', ' + yearShort;
+
+        let salute;
+        if      (hour < 5)  salute = 'Good Night';
+        else if (hour < 12) salute = 'Good Morning';
+        else if (hour < 17) salute = 'Good Afternoon';
+        else if (hour < 22) salute = 'Good Evening';
+        else                salute = 'Good Night';
+
+        const tEl = _gid('hubTime');   if (tEl) tEl.textContent = time;
+        const dEl = _gid('hubDate');   if (dEl) dEl.textContent = dateText;
+        const sEl = _gid('hubSalute'); if (sEl) sEl.textContent = salute + ', Welcome Home';
+    }
+
+    // Retry-until-ready wrapper for tickClock. The CH5 page loader injects
+    // home.html ASYNCHRONOUSLY after the page-script IIFEs run, so the very
+    // first tickClock() call on boot can race the injection: #hubTime /
+    // #hubDate / #hubSalute don't yet exist, the lookups return null, the
+    // `if (tEl)` guards silently no-op, and the user stares at the literal
+    // defaults ("Welcome Home" / "—" / "—") for up to ~60 s until the
+    // setInterval(60000) fallback fires. Retrying with growing gaps over
+    // ~2.65 s catches the elements as soon as CH5 finishes injecting,
+    // then stops.
+    function tickClockWhenReady() {
+        const gaps = [50, 100, 200, 400, 700, 1200];  // gaps in ms; total ~2.65 s
+        let attempt = 0;
+        (function step() {
+            if (_gid('hubTime')) { tickClock(); return; }
+            if (attempt < gaps.length) {
+                setTimeout(step, gaps[attempt++]);
+            }
+        })();
+    }
+
+    // ────────────── Theme switcher ───────────────────────────────────────────
+    // Sets data-theme on <html>, persists the choice to localStorage, and
+    // re-applies it. CH5 pages share one document, so the attribute also
+    // sticks across in-app navigation; index.html re-applies it on a full
+    // reload (it boots to this hub page). Colours themselves live in
+    // _theme-additions.scss :root / [data-theme="…"] blocks.
+    const THEME_KEY = 'app-theme';
+    const THEMES    = ['blue', 'dark', 'light'];
+
+    function applyTheme(name) {
+        const theme = THEMES.indexOf(name) >= 0 ? name : 'blue';
+        document.documentElement.setAttribute('data-theme', theme);
+        return theme;
+    }
+    // Read the OS / phone color scheme via prefers-color-scheme. Returns
+    // 'dark' or 'light'; falls back to 'blue' (the brand default) only if
+    // the browser doesn't expose a preference or matchMedia isn't supported.
+    function osTheme() {
+        try {
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)  return 'dark';
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) return 'light';
+        } catch (e) { /* matchMedia unavailable */ }
+        return 'blue';
+    }
+    // OS / phone is the source of truth for the theme — every load and
+    // every OS flip re-applies it. The dropdown still works in-session
+    // (for picking Blue, or a temporary preview) but does not pin the
+    // theme: the next OS flip overrides it. localStorage is intentionally
+    // ignored here so the behaviour is identical on every fresh load.
+    function storedTheme() {
+        return osTheme();
+    }
+    const THEME_LABELS = { blue: 'Blue', dark: 'Dark', light: 'Light' };
+
+    // Reflect the active theme in the topbar dropdown (trigger + menu marks).
+    function updateThemeUI(theme) {
+        const lbl = _gid('themeDDLabel');
+        if (lbl) lbl.textContent = THEME_LABELS[theme] || 'Blue';
+        const sw = _gid('themeDDSwatch');
+        if (sw) sw.className = 'theme-dd-sw hub-theme-swatch--' + theme;
+        _qsa('.theme-dd-item').forEach((b) => {
+            b.classList.toggle('active', b.getAttribute('data-theme-opt') === theme);
+        });
+    }
+
+    function closeThemeMenu() {
+        const dd = _gid('themeDD');
+        if (!dd) return;
+        dd.classList.remove('open');
+        const trg = dd.querySelector('.theme-dd-trigger');
+        if (trg) trg.setAttribute('aria-expanded', 'false');
+    }
+
+    // Exposed for the inline onclick="toggleThemeMenu()" on the dropdown trigger.
+    window.toggleThemeMenu = function () {
+        const dd = _gid('themeDD');
+        if (!dd) return;
+        const open = dd.classList.toggle('open');
+        const trg = dd.querySelector('.theme-dd-trigger');
+        if (trg) trg.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+
+    // Exposed for the inline onclick="setTheme('…')" on the dropdown items.
+    window.setTheme = function (name) {
+        const theme = applyTheme(name);
+        try { window.localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+        updateThemeUI(theme);
+        closeThemeMenu();
+    };
+
+    function initTheme() {
+        updateThemeUI(applyTheme(storedTheme()));
+        // Close the dropdown when tapping anywhere outside it.
+        // Bound once — on a CH5 panel the page script can re-run when the
+        // page is re-injected, which would otherwise stack duplicate listeners.
+        if (!window.__themeOutsideClickBound) {
+            window.__themeOutsideClickBound = true;
+            document.addEventListener('click', (e) => {
+                const dd = _gid('themeDD');
+                if (dd && !dd.contains(e.target)) closeThemeMenu();
+            });
+        }
+        // Live-follow OS theme flips — UNCONDITIONALLY. A dropdown pick
+        // only applies until the next OS change, so the user never gets
+        // stuck in a theme that disagrees with their phone's mode.
+        if (!window.__themeOSFollowBound) {
+            window.__themeOSFollowBound = true;
+            try {
+                const mql = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+                if (mql) {
+                    const onOSChange = (e) => {
+                        updateThemeUI(applyTheme(e.matches ? 'dark' : 'light'));
+                    };
+                    if (mql.addEventListener) mql.addEventListener('change', onOSChange);
+                    else if (mql.addListener) mql.addListener(onOSChange);  // Safari < 14
+                }
+            } catch (e) { /* matchMedia unavailable */ }
+        }
+    }
+
+    // ────────────── Init ────────────────────────────────────────────────────
+    function onInit() {
+        console.log('🏠 Home Hub Initialized');
+        initTheme();
+        tickClockWhenReady();
+        // Re-tick on the next minute boundary, then every minute.
+        const ms = 60000 - ((Date.now()) % 60000);
+        setTimeout(() => { tickClock(); setInterval(tickClock, 60000); }, ms);
+
+        bindConnState();
+        setupModeFeedback();
+
+        // Optional: ask CP4 to refresh its state for any subscribers on
+        // the hub (today: none — kept here so the hook exists for later).
+        const sysMap = J() && J().SYSTEM;
+        if (sysMap && sysMap.REQUEST_REFRESH) {
+            pulse(sysMap.REQUEST_REFRESH);
+        }
+    }
+
+    // CH5 import-htmlsnippet runs scripts after injecting the DOM, so the
+    // hub elements should already exist when this file runs. But to be
+    // safe on dev/browser, defer to after DOMContentLoaded if needed.
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', onInit);
+    } else {
+        onInit();
+    }
+
+    return { onInit, tickClock, setConn };
+})();
+/* ============================================================================
+ * joins-home.js  —  CRESTRON JOIN MAP for the Home Hub
+ * ============================================================================
+ *
+ *   Suggested join range for the hub:
+ *       D  10–29  (digital)
+ *       A   1–9   (analog)
+ *
+ *   Renumber freely to match your CP4 SIMPL program.
+ *
+ *   Naming follows the same convention as joins<N>.js for the room pages:
+ *     SECTION.KEY = 'joinNumber'
+ *
+ *   The hub's HOUSE_MODES joins are SEPARATE from each room's
+ *   page<N>.HOUSE_MODES joins. If you want them to drive the same SIMPL
+ *   logic, just give them the same number here as in joins1.js
+ *   (e.g. JHOME.HOUSE_MODES.MORNING = '120' === J1.HOUSE_MODES.MORNING).
+ *
+ *   JOIN TYPE LEGEND
+ *     D  = Digital  — boolean
+ *     A  = Analog   — number
+ *
+ * ============================================================================ */
+
+const JHOME = {
+
+    /* SYSTEM
+     * ----------------------------------------------------------------
+     * Hub-level housekeeping signals.                                 */
+    SYSTEM: {
+        // D -> Pulse on hub init to ask CP4 to re-broadcast all state.
+        REQUEST_REFRESH: '10',
+        // S <- "Active page" feedback. Subscribed by other widgets that
+        //      need to know which room the user is currently viewing.
+        ACTIVE_PAGE:     '11',
+        // D <- Heartbeat from the CP4. Wire SIMPL to TOGGLE this digital
+        //      join every 2 seconds (an OSC pulse with a 50% duty cycle
+        //      works fine). The panel watches the time between toggles —
+        //      if it stops changing for >5 s, the .conn pill flips to
+        //      "warn" (yellow); if >12 s it flips to "bad" (red).
+        //      Leave as '' to disable the heartbeat entirely.
+        HEARTBEAT:       '12'
+    },
+
+    /* HOUSE_MODES
+     * ----------------------------------------------------------------
+     * Six whole-house scenes. Each pulses one digital join.           */
+    HOUSE_MODES: {
+        MORNING: '3081',
+        GUEST:   '3082',
+        NIGHT:   '3084',
+        AWAY:    '3083',
+        PARTY:   '',
+        RELAX:   ''
+    },
+
+    /* SENSORS
+     * ----------------------------------------------------------------
+     * The "Sensors" card on the home hub opens a popup with two
+     * buttons; each pulses one of these digital joins.                */
+    SENSORS: {
+        ON:  '1375',   // D -> Pulse to enable all sensors
+        OFF: '1376'    // D -> Pulse to disable all sensors
+    },
+
+    /* HOUSE_FUNCTIONS
+     * ----------------------------------------------------------------
+     * Per-floor on/off toggles for Lights, AC, Shades.
+     * Convention: <FLOOR>_<SYSTEM>_<ON|OFF>                            */
+    HOUSE_FUNCTIONS: {
+        FIRST_LIGHTS_ON:    '', FIRST_LIGHTS_OFF:   '',
+        FIRST_AC_ON:        '', FIRST_AC_OFF:       '',
+        FIRST_SHADES_ON:    '', FIRST_SHADES_OFF:   '',
+
+        GROUND_LIGHTS_ON:   '', GROUND_LIGHTS_OFF:  '',
+        GROUND_AC_ON:       '', GROUND_AC_OFF:      '',
+        GROUND_SHADES_ON:   '', GROUND_SHADES_OFF:  '',
+
+        BASEMENT_LIGHTS_ON: '', BASEMENT_LIGHTS_OFF:'',
+        BASEMENT_AC_ON:     '', BASEMENT_AC_OFF:    '',
+        BASEMENT_SHADES_ON: '', BASEMENT_SHADES_OFF:''
+    },
+
+    /* SHUTDOWN
+     * ----------------------------------------------------------------
+     * Per-floor and whole-house shutdown pulses.
+     * Convention: <FLOOR>_<SYSTEM> for floors,  ALL_<SYSTEM> for global,
+     *             ALL_SYSTEMS = master one-tap kill switch.            */
+    SHUTDOWN: {
+        FIRST_LIGHTS:    '3212', FIRST_AV:    '3213', FIRST_SHADES:    '3215', FIRST_ALL:    '3211',
+        GROUND_LIGHTS:   '3222', GROUND_AV:   '3223', GROUND_SHADES:   '3225', GROUND_ALL:   '3221',
+        BASEMENT_LIGHTS: '3242', BASEMENT_AV: '3243', BASEMENT_SHADES: '3245', BASEMENT_ALL: '3241',
+        ALL_LIGHTS:      '3232', ALL_AV:      '3233', ALL_SHADES:      '3235', ALL_AC:      '',
+        ALL_SYSTEMS:     '3231'
+    },
+
+    /* WEATHER  (top-of-hub info card)
+     * ----------------------------------------------------------------
+     * Drive these from the CP4 with a weather driver, a REST call, or
+     * any outdoor sensor/gateway you have. All joins are FEEDBACK only
+     * (panel never writes). Leave any key as '' to hide its value on
+     * the hub UI.
+     *                                                                  */
+    WEATHER: {
+        TEMPERATURE: '3',                // A <- current outdoor temp  (integer °C)
+        FEELS_LIKE:  '3',                // A <- "feels like" temp     (integer °C)
+        HUMIDITY:    '2',                // A <- humidity              (0-100 %)
+        WIND_SPEED:  '1',                // A <- wind speed            (km/h)
+        CONDITION:   'weather_condition', // S <- "Sunny" / "Cloudy" / …
+        ICON:        'weather_icon',      // S <- emoji or text glyph
+        CITY:        'weather_city'       // S <- "Cairo"
+    }
+
+};
+
+if (typeof window !== 'undefined') {
+    window.JHOME = JHOME;
+}
+/* ============================================================================
+ * joins1.js  —  CRESTRON JOIN MAP for PAGE 1  (Master Bedroom)
+ * ============================================================================
+ *
+ *   Every join number used by page1 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '100') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page1.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page1: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page1.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J1 → J<N> AND window.J1 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J1 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '100',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '101',  // D -> True while this page is the visible page
+        SHUTDOWN:               '25',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '24',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page1_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page1_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '2801',   // D -> Whole-room "Morning" preset
+        RELAX:    '2800',   // D -> "Relax"
+        DRESSING: '2803',   // D -> "Dressing"
+        SLEEP:    '2806'    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_BEDROOM: {
+        ON:    '3511', DIM:   '3512', RELAX: '3513', OFF:   '3515',
+                // Detail-popup channels — assign actual SIMPL joins; delete unused rows freely.
+        // D = Digital (ON/OFF pulse)   A = Analog (dimmer send/feedback 0-100)
+         },
+    LIGHTS_BATHROOM: {
+        ON:    '3521', DIM:   '3522', RELAX: '3523', OFF:   '3524',
+    },
+    LIGHTS_DRESSING: {
+        ON:    '3516', DIM:   '3517', RELAX: '3518', OFF:   '3519',
+    },
+    LIGHTS_READING: {
+        ON:    '2498',  OFF:   '2499',
+    },
+
+   
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page1.js.                                     */
+    SHADES: {
+        // Bedroom shutter — keys MUST be UPPERCASE: page1.js builds the
+        // lookup as SHADE_JOIN_PREFIX['bedroom'] ('BEDROOM') + '_OPEN'.
+        BEDROOM_OPEN:  '3174',  // D -> raise
+        BEDROOM_CLOSE: '3175',  // D -> lower
+        BEDROOM_STOP:  '3177',  // D -> stop
+        //BEDROOM_POS:   '1',   // A -> target position 0-100
+        //BEDROOM_FB:    '1',   // A <- current position 0-100
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+        POWER:         '',   // D -> on / off pulse  ← fill in real join
+        POWER_FB:      '',   // D <- current power state
+        MODE_AUTO:     '',   MODE_AUTO_FB:     '',
+        MODE_COOL:     '',   MODE_COOL_FB:     '',
+        MODE_HEAT:     '',   MODE_HEAT_FB:     '',
+        MODE_DRY:      '',   MODE_DRY_FB:      '',
+        MODE_FAN_ONLY: '',   MODE_FAN_ONLY_FB: '',
+        FAN_AUTO:      '',   FAN_AUTO_FB:      '',
+        FAN_LOW:       '',   FAN_LOW_FB:       '',
+        FAN_MED:       '',   FAN_MED_FB:       '',
+        FAN_HIGH:      '',   FAN_HIGH_FB:      '',
+        SP_SEND:       '',   SP_FB:            '',
+        ROOM_TEMP_FB:  ''
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+        POWER:        '',   // D -> on / off pulse  ← fill in real join
+        POWER_FB:     '',   // D <- current power state
+        SP_SEND:      '',   // A -> setpoint
+        SP_FB:        '',   // A <- setpoint feedback
+        ROOM_TEMP_FB: ''    // A <- current room temp
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+        POWER:    '802',  //SOURCE:   '301',
+        VOL_UP:   '807',  VOL_DOWN: '808',  MUTE:     '809',
+        CH_UP:    '1025',  CH_DOWN:  '1026',
+        DPAD_UP:  '794',  DPAD_DOWN:'795',  DPAD_LEFT:'796',
+        DPAD_RIGHT:'797', DPAD_OK:  '798',
+        KEY_BACK: '1034',  KEY_HOME: '1036',  KEY_MENU: '1035',
+        KEY_ENTER:'798',  KEY_CHLIST:'1037',
+        KEYPAD_BASE: 780, // numeric — KEYPAD_BASE+0..9 → joins '780'-'789'
+      //  FAV_BASE:    340  // numeric — FAV_BASE+0..9   → joins '340'-'349'
+    },
+
+    /* ─── APPS  (satellite / streaming receivers) ────────────────────────
+     * GLOBAL JOINS — these join numbers are identical on every page.
+     * There is one physical OSN box, one BeIN box, one Freesat box in the
+     * house, so their IR/driver joins do NOT change per room.
+     * DO NOT shift these numbers when copying to another page.
+     *
+     * Ranges: OSN 5000-5027 | BEIN 5030-5057 | FREESAT 5060-5087       */
+    APPS: {
+        // -- OSN ----------------------------------------------------------
+        OSN: {
+            POWER:    '802',  //SOURCE:   '5001',
+            VOL_UP:   '807',  VOL_DOWN: '808',  MUTE:     '809',
+            CH_UP:    '1308',  CH_DOWN:  '1307',
+            DPAD_UP:  '544',   DPAD_DOWN:'545',   DPAD_LEFT:'546',
+            DPAD_RIGHT:'547',  DPAD_OK:  '548',
+            KEY_0: '558', KEY_1: '549', KEY_2: '550', KEY_3: '551',
+            KEY_4: '552', KEY_5: '553', KEY_6: '554', KEY_7: '555',
+            KEY_8: '556', KEY_9: '557',
+            KEY_HOME: '1306', KEY_MENU: '1311', KEY_BACK: '1309',
+            KEY_CHLIST: '', LAUNCH: ''
+        },
+        // -- BeIN Sports --------------------------------------------------
+        BEIN: {
+            POWER:    '802',  //SOURCE:   '5031',
+            VOL_UP:   '807',  VOL_DOWN: '808',  MUTE:     '809',
+            CH_UP:    '1248',  CH_DOWN:  '1249',
+            DPAD_UP:  '577',   DPAD_DOWN:'578',   DPAD_LEFT:'579',
+            DPAD_RIGHT:'580',  DPAD_OK:  '581',
+            KEY_0: '591', KEY_1: '582', KEY_2: '583', KEY_3: '584',
+            KEY_4: '585', KEY_5: '586', KEY_6: '587', KEY_7: '588',
+            KEY_8: '589', KEY_9: '590',
+            KEY_HOME: '1247', KEY_MENU: '1251', KEY_BACK: '1250',
+            KEY_CHLIST: ''
+        },
+        // -- Freesat ------------------------------------------------------
+        FREESAT: {
+            POWER:    '802',     //SOURCE:   '',
+            VOL_UP:   '807',   VOL_DOWN: '808',   MUTE:     '809',
+            CH_UP:    '560',   CH_DOWN:  '561',
+            DPAD_UP:  '560',   DPAD_DOWN:'561',   DPAD_LEFT:'562',
+            DPAD_RIGHT:'563',  DPAD_OK:  '564',
+            KEY_0: '574', KEY_1: '565', KEY_2: '566', KEY_3: '567',
+            KEY_4: '568', KEY_5: '569', KEY_6: '570', KEY_7: '571',
+            KEY_8: '572', KEY_9: '573',
+            KEY_HOME: '1486', KEY_MENU: '1487', KEY_BACK: '1478'
+        }
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / BeIN / Freesat — fires
+     * BEFORE the receiver-remote view is shown, so SIMPL can switch the
+     * AV matrix to that source. Per-page; leave '' for UI-only.         */
+    LAUNCHERS: {
+        OSN:     '816',   // D -> tapping OSN launcher
+        BEIN:    '818',   // D -> tapping BeIN launcher
+        FREESAT: '815'    // D -> tapping Freesat launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '700',
+        VOL_UP:    '704',
+        VOL_DOWN:  '705',   
+        MUTE:      '706',
+        POWER_OFF: '707'
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J1 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page1.js loaded
+ * after this file with a plain <script src="page1.js"></script>.
+ * We ALSO assign it to window.J1 so:
+ *   - you can probe it in the browser console as window.J1
+ *   - page1.js's `typeof window.J1` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J1 → J<N> AND window.J1 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J1 = J1;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J1;
+}
+/* page1.js — Smart Home Control (4 Widgets) — PAGE 1
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins1.js              ║
+ * ║  and accessed here via the global constant object   J1           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins1.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J1               →   J<N>            (e.g. J2)             │
+ * │           window.J1        →   window.J1<N>     (e.g. window.J2)      │
+ * │           joins1.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page1            →   page<N>         (e.g. page2)          │
+ * │           page1Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 1 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page1.html — MUST be in this order):
+ *   1. joins1.js    ← sets window.J1
+ *   2. page1.js     ← reads window.J1
  */
 
 const page1Module = (() => {
     'use strict';
 
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page1.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page1' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page1';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page1-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins1.js (window.J1) into a local
+    //  const so the rest of the file just writes  J1.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J1 and window.J1 to J<N> /
+    //                       window.J1<N> on this single line.
+    const J1 = (typeof window !== 'undefined' && window.J1)
+        ? window.J1
+        : (typeof J1 !== 'undefined' ? J1 : null);
+
+    // ====================== GUARD ======================
+    if (!J1) {
+        console.error(
+            '[page1.js] window.J1 is not defined.\n' +
+            'joins1.js must be loaded BEFORE page1.js.\n' +
+            'Fix load order in page1.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J1.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J1 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J1 is always usable (real map or proxy stub).
+    const JOINS = J1 || window.J1;
+
     // ====================== CrComLib SAFE HELPERS ======================
     const hasCrestron = () => typeof CrComLib !== 'undefined';
 
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
     function pulse(join, ms = 100) {
         if (!hasCrestron() || !join) return;
-        CrComLib.publishEvent('b', join, true);
-        setTimeout(() => CrComLib.publishEvent('b', join, false), ms);
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
     }
 
     function sendAnalog(join, value) {
@@ -3735,9 +4856,2205 @@ const page1Module = (() => {
         CrComLib.subscribeState('n', join, cb);
     }
 
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page1('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page1('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page1('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page1('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J1 map declared in joins1.js
+     * (e.g. 'AC.SP_SEND' resolves J1.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins1.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page1` → `_page<N>` and `J1` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page1(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J1);
+    }
+    window.tap_page1 = function (joinPath, ms) {
+        const join = _resolveJoin_page1(joinPath);
+        if (!join) { console.warn('[tap_page1] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page1 = function (joinPath, value) {
+        const join = _resolveJoin_page1(joinPath);
+        if (!join) { console.warn('[set_page1] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page1 = function (joinPath, value) {
+        const join = _resolveJoin_page1(joinPath);
+        if (!join) { console.warn('[send_page1] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
     // ====================== PRESET CATALOG ======================
-    // Fallback if the HTML didn't define window.LIGHT_PRESETS. The real
-    // catalog lives in page1.html <head> so it's easy to edit.
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        sunset:  { label: 'Sunset', icon: '☀️',  color: 'sunset' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            // Don't start the long-press timer when the user is interacting with
+            // the on/off toggle itself — the slider has its own click handler.
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins1 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins1.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        bedroom:  'LIGHTS_BEDROOM',
+        bathroom: 'LIGHTS_BATHROOM',
+        dressing: 'LIGHTS_DRESSING',
+        reading:  'LIGHTS_READING',
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J1.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins1.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins1.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards / rows ───────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins1.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins1.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins1.js takes effect.
+                // (val is falsy when the key is missing from joins1.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins1.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins1.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page1 = 0;
+    let _hbTicker_page1 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page1 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page1 = Date.now();
+        subBool(hb, () => { _hbLast_page1 = Date.now(); });
+
+        if (_hbTicker_page1) clearInterval(_hbTicker_page1);
+        _hbTicker_page1 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page1) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 1 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins1.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page1, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page1
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page1(widgetName, target);
+    }
+
+    window.switchWidget_page1 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J1.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page1 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page1' / 'tv-favorites-page1'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page1 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J1.LIGHTS_<AREA>.<PRESET> in joins1.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   • Main   — uses data-analog / data-fb (= J1.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   • Accent — uses data-dim-accent / data-dim-accent-fb
+            //   • Wall   — uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            // Per-channel level cache. Updated by user input AND by feedback
+            // subscriptions in setupLightsFeedback().
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},  // per-channel dimmer level cache for the detail popup
+                chStates: {}   // per-channel on/off state ('on' | 'off' | null)
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page1(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            // Fires AFTER the inline onclick pulse, so the visual is instant.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J1.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J1.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J1.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J1.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+
+        // D ← global preset feedback — SIMPL holds the same join HIGH while active
+        if (hasCrestron()) {
+            subBool(JOINS.LIGHTS_GLOBAL.MORNING,  (v) => { const el = _gid('globalMorning');  if (el) el.classList.toggle('lglobal-active', !!v); });
+            subBool(JOINS.LIGHTS_GLOBAL.RELAX,    (v) => { const el = _gid('globalRelax');    if (el) el.classList.toggle('lglobal-active', !!v); });
+            subBool(JOINS.LIGHTS_GLOBAL.DRESSING, (v) => { const el = _gid('globalDressing'); if (el) el.classList.toggle('lglobal-active', !!v); });
+            subBool(JOINS.LIGHTS_GLOBAL.SLEEP,    (v) => { const el = _gid('globalSleep');    if (el) el.classList.toggle('lglobal-active', !!v); });
+        }
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss — independent of
+        // which preset is active, just a binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        // Sync every channel dimmer bar to the preset level so the popup
+        // always reflects the area's current state.
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+    function renderPanelPresets(areaKey) {
+        const grid = _gid('panelPresetGrid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        const st = areaState[areaKey];
+        if (!st) return;
+        st.presets.forEach(pk => {
+            const info = presetInfo(pk);
+            const btn  = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'preset-btn preset-' + (info.color || 'generic');
+            btn.dataset.preset = pk;
+            btn.innerHTML =
+                '<span class="preset-ico">' + (info.icon || '•') + '</span>' +
+                '<span class="preset-lbl">' + labelFor(areaKey, pk) + '</span>';
+            btn.addEventListener('click', () => sendAreaPreset(pk));
+            grid.appendChild(btn);
+        });
+    }
+
+    window.openAreaPanel_page1 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J1.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    /* Render one .dim-row per available channel into #panelDimmers-page1.
+     * Each row carries the channel key + send-join in data-* attributes so
+     * the single delegated 'input' listener (in setupAreaPanelControls)
+     * doesn't need closures over per-channel state. */
+    function renderPanelDimmers(areaKey) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const st = areaState[areaKey];
+        if (!st || !st.channels || st.channels.length === 0) {
+            wrap.classList.add('hidden');
+            return;
+        }
+        wrap.classList.remove('hidden');
+        st.channels.forEach(ch => {
+            const lvl = st.levels[ch.key] || 0;
+            const row = document.createElement('div');
+            row.className = 'dim-row';
+            row.dataset.channel = ch.key;
+            row.innerHTML = `
+              <div class="dim-row-head">
+                <span class="dim-row-label">${ch.label}</span>
+                <span class="dim-row-value" data-channel="${ch.key}">${lvl}%</span>
+              </div>
+              <div class="dim-row-track">
+                <div class="dim-row-fill" data-channel="${ch.key}" style="width: ${lvl}%"></div>
+                <input type="range" class="dim-row-slider"
+                       data-channel="${ch.key}"
+                       data-send="${ch.send}"
+                       min="0" max="100" value="${lvl}"
+                       aria-label="${ch.label} dimmer">
+              </div>
+            `;
+            wrap.appendChild(row);
+        });
+    }
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    // Escape a string for use inside an HTML attribute value (double-quoted).
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS.
+     * Each row has an ON button, an OFF button, and a dimmer slider.
+     * To add/remove channels: edit joins1.js → LIGHTS_<AREA>.CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    /* Toggle the ON/OFF button active highlight for one channel row. */
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    /* Update state cache + DOM for a single channel's ON/OFF button pair. */
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    window.closeAreaPanel_page1 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page1();
+    });
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    /* Single delegated 'input' listener on #panelDimmers — handles every
+     * dimmer channel. Each .dim-row-slider carries its channel key + send
+     * join in data-* so the listener can route updates without per-row
+     * closures (cleaner when rows are dynamically rebuilt by openAreaPanel). */
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        // Channel name editing — save to localStorage on blur / Enter
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        // ON / OFF button taps — delegate from the container
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        // Dimmer slider — delegate from the container
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    function sendAreaPreset(preset) {
+        if (!currentPanelArea) return;
+        const st   = areaState[currentPanelArea];
+        const join = st?.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-<preset> on card = J1.LIGHTS_<AREA>.<PRESET>
+        } else {
+            console.warn('[lights] No join for preset "' + preset + '" on area "' + currentPanelArea + '"');
+        }
+        setAreaVisual(currentPanelArea, preset);
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page1 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J1.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A ← per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall — only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins1.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // New design: animated window preview + arrow control buttons.
+    // Joins come from data-join-* attributes on each .shade-card in page1.html
+    // and must match the J1.SHADES.* constants in joins1.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J1.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J1.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J1.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J1.SHADES.<n>_FB
+        const isVert   = (card.dataset.orientation || 'vertical') === 'vertical';
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0, isVert);
+
+        // A ← J1.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v, isVert);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos /*, isVert */) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        // Already at the destination? No-op.
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        // Already moving the same direction? Let the existing animation continue.
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page1 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page1' / 'ac-heater-page1'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J1.AC.* or J1.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page1) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J1.AC.POWER_FB / J1.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J1.AC.ROOM_TEMP_FB or J1.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page1 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J1.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J1.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J1.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J1.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J1.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J1.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J1.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page1 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J1.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J1.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J1.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+        // The TV-remote (tv-controls) UI was removed; the main TV view now
+        // only shows the receiver launchers (inline onclick -> openAppPanel_page1).
+        // Wire the app-remote view buttons (joins resolved per active receiver).
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page1, appKey1-page1) and
+     * a single click handler that reads window.__activeApp_page1 and pulses
+     * the matching join from J1.APPS.<APP_KEY>. This keeps the DOM small
+     * (one set of buttons, not 5×) and means new apps are added by editing
+     * ONLY (a) the quick-grid in page1.html and (b) joins1.js → APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        freesat: { label: 'Freesat',     icon: '📡', joinKey: 'FREESAT' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+        _gid('appExitBtn')?.addEventListener('click', () => pulse(appJoin('EXIT')));
+
+        // Power, source, vol, ch, mute — each receiver has its own joins.
+        _gid('appPowerBtn')  ?.addEventListener('click', () => pulse(appJoin('POWER')));
+        _gid('appSourceBtn') ?.addEventListener('click', () => pulse(appJoin('SOURCE')));
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(appJoin('VOL_UP')));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(appJoin('VOL_DOWN')));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(appJoin('MUTE')));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(appJoin('CH_UP')));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(appJoin('CH_DOWN')));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup — both views are
+     * siblings inside #widget-tv-page1 and toggle via the [hidden] attr. */
+    window.openAppPanel_page1 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins1.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page1 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page1();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → J1.MUSIC.AIRPLAY
+     *   • Vol +                → J1.MUSIC.VOL_UP
+     *   • Vol −                → J1.MUSIC.VOL_DOWN
+     *   • Mute                 → J1.MUSIC.MUTE
+     *   • Power Off            → J1.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joins1.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+
+        // NOTE: do NOT subscribe to MUSIC.MUTE here. MUTE (join 706) is a
+        // GLOBAL momentary join that every page's mute button publishes.
+        // Subscribing to it registers a native feedback subscription in
+        // CrComLib's shared signal state; because Ch5SignalBridge.publish()
+        // calls unsubscribe() on the join each time it is published, that
+        // subscription swallows the first press's rising edge — forcing a
+        // second tap before the mute reaches SIMPL, on EVERY page (volume
+        // joins, which are never subscribed, work on a single press). Mute
+        // must stay a pure publisher like Vol+/Vol−/Power Off.
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    // Subscribe to every area-row button's join (same join number that the
+    // button pulses). SIMPL echoes it HIGH while that preset is active.
+    // No HTML changes needed — join paths are parsed from the onclick attr.
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page1(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            // Derive preset + area key from the button's classes / parent
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                // Only react to HIGH — removing on LOW would fight the
+                // optimistic highlight set by the click listener above.
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                // Also sync channel bars + states when SIMPL drives the change
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    // Two subscriptions per channel:
+    //   D ← ch.ON  (SAME join the ON button pulses) — SIMPL holds HIGH while
+    //               the channel is on, LOW when off.  Drives button state.
+    //   A ← ch.DIM_FB — dimmer level 0-100.  Drives the slider bar.
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                // D ← ON join feedback — same number as the ON button.
+                // HIGH = channel on, LOW = channel off.
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            // SIMPL went LOW → channel is off → zero the bar
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            // No dimmer join — show full bar when on
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+
+                // A ← DIM_FB — dimmer level 0-100.  Also syncs button state
+                // when SIMPL dims a channel to 0 without pulsing the OFF join.
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        // Derive on/off state from level so buttons stay in sync
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J1.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J1.SYSTEM.PAGE_ACTIVE — tell CH5 shell page1 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page1-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page1, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page1-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page1 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins2.js  —  CRESTRON JOIN MAP for PAGE 2  (Living Room)
+ * ============================================================================
+ *
+ *   Every join number used by page2 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '500') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page2.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page2: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page2.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J2 → J<N> AND window.J2 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J2 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '',  // D -> True while this page is the visible page
+        SHUTDOWN: '295', //without shutter  D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '294',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page2_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page2_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '2881',   // D -> Whole-room "Morning" preset
+        RELAX:    '2880',   // D -> "Relax"
+        DRESSING: '2883',   // D -> "Dressing"
+        SLEEP:    '2885'    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_LIVING: {
+        ON:    '3553', DIM:   '3554', RELAX: '3555', OFF:   '3556',
+        DIMMER_SEND: '',  DIMMER_FB:    '',
+        CHANNELS: [
+            { label: 'Side Frame 2 Spots', ON: '2641', OFF: '2642' },
+            { label: 'Living Spots',     ON: '2657', OFF: '2658' },
+            { label: 'Inside Cove',       ON: '2651', OFF: '2652' },
+            { label: 'Outside Cove',       ON: '2655', OFF: '2656'},
+            { label: 'Chandeliers',      DIM_SEND: '247', DIM_FB: '247' }
+            ]
+    },
+    LIGHTS_TERRACE: {
+        ON:    '3586', DIM:   '3587', RELAX: '3588', OFF:   '3589',
+        DIMMER_SEND: '',  DIMMER_FB:    '',
+    },
+    LIGHTS_CORRIDOR: {
+        ON:    '3496', DIM:   '', RELAX: '', OFF:   '3499',
+        DIMMER_SEND: '',  DIMMER_FB:    '',
+    },
+    
+
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page2.js.                                     */
+    SHADES: {
+        // Living Room shutter
+        LIVING_ROOM_OPEN:  '3180',  // D -> raise
+        LIVING_ROOM_CLOSE: '3181',  // D -> lower
+        LIVING_ROOM_STOP:  '3183',  // D -> stop
+        LIVING_ROOM_POS:   '',   // A -> target position 0-100
+        LIVING_ROOM_FB:    '',   // A <- current position 0-100
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+        POWER:         '',  // D -> on / off pulse
+        POWER_FB:      '',  // D <- current power state
+        MODE_AUTO:     '',  MODE_AUTO_FB:     '',
+        MODE_COOL:     '',  MODE_COOL_FB:     '',
+        MODE_HEAT:     '',  MODE_HEAT_FB:     '',
+        MODE_DRY:      '',  MODE_DRY_FB:      '',
+        MODE_FAN_ONLY: '',  MODE_FAN_ONLY_FB: '',
+        FAN_AUTO:      '',  FAN_AUTO_FB:      '',
+        FAN_LOW:       '',  FAN_LOW_FB:       '',
+        FAN_MED:       '',  FAN_MED_FB:       '',
+        FAN_HIGH:      '',  FAN_HIGH_FB:      '',
+      SP_SEND:       '',   // A -> setpoint write (16-30 °C)
+        SP_FB:         '',   // A <- setpoint echo from CP4
+        ROOM_TEMP_FB:  ''    // A <- live room temperature
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+        POWER:        '',  POWER_FB:     '',
+        SP_SEND:      '',   SP_FB:        '',  ROOM_TEMP_FB: ''
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+        POWER:    '882',  //SOURCE:   '701',
+        VOL_UP:   '883',  VOL_DOWN: '884',  MUTE:     '885',
+        CH_UP:    '1145',  CH_DOWN:  '1146',
+        DPAD_UP:  '1901',  DPAD_DOWN:'1902',  DPAD_LEFT:'1903',
+        DPAD_RIGHT:'1904', DPAD_OK:  '1905',
+        KEY_BACK: '1154',  KEY_HOME: '1156',  KEY_MENU: '1155',
+        KEY_ENTER:'1905',  KEY_CHLIST:'1157',  LAUNCH:   '1158', //Exit: '1158'
+        KEYPAD_BASE: 1906, // numeric — KEYPAD_BASE+0..9 → joins '730'-'739'
+        //FAV_BASE:    740  // numeric — FAV_BASE+0..9   → joins '740'-'749'
+    },
+
+    /* ─── APPS  (satellite / streaming receivers) ────────────────────────
+     * GLOBAL JOINS — these join numbers are identical on every page.
+     * There is one physical OSN box, one BeIN box, one Freesat box in the
+     * house, so their IR/driver joins do NOT change per room.
+     * DO NOT shift these numbers when copying to another page.
+     *
+     * Ranges: OSN 5000-5027 | BEIN 5030-5057 | FREESAT 5060-5087       */
+    APPS: {
+        // -- OSN -------------------------------------------------------------------
+        OSN: {
+            POWER:    '880',  //SOURCE:   '5001',
+            VOL_UP:   '887',  VOL_DOWN: '888',  MUTE:     '889',
+            CH_UP:    '1308',  CH_DOWN:  '1307',
+            DPAD_UP:  '544',   DPAD_DOWN:'545',   DPAD_LEFT:'546',
+            DPAD_RIGHT:'547',  DPAD_OK:  '548',
+            KEY_0: '558', KEY_1: '549', KEY_2: '550', KEY_3: '551',
+            KEY_4: '552', KEY_5: '553', KEY_6: '554', KEY_7: '555',
+            KEY_8: '556', KEY_9: '557',
+            KEY_HOME: '1306', KEY_MENU: '1311', KEY_BACK: '1309',
+            KEY_CHLIST: '', LAUNCH: ''
+        },
+        // -- BeIN Sports -----------------------------------------------------------
+        BEIN: {
+            POWER:    '880',  //SOURCE:   '5031',
+            VOL_UP:   '887',  VOL_DOWN: '888',  MUTE:     '889',
+            CH_UP:    '1248',  CH_DOWN:  '1249',
+            DPAD_UP:  '577',   DPAD_DOWN:'578',   DPAD_LEFT:'579',
+            DPAD_RIGHT:'580',  DPAD_OK:  '581',
+            KEY_0: '591', KEY_1: '582', KEY_2: '583', KEY_3: '584',
+            KEY_4: '585', KEY_5: '586', KEY_6: '587', KEY_7: '588',
+            KEY_8: '589', KEY_9: '590',
+            KEY_HOME: '1247', KEY_MENU: '1251', KEY_BACK: '1250',
+            KEY_CHLIST: ''
+        },
+        // -- Freesat ---------------------------------------------------------------
+        FREESAT: {
+            POWER:    '880',     //SOURCE:   '',
+            VOL_UP:   '887',   VOL_DOWN: '888',   MUTE:     '889',
+            CH_UP:    '560',   CH_DOWN:  '561',
+            DPAD_UP:  '560',   DPAD_DOWN:'561',   DPAD_LEFT:'562',
+            DPAD_RIGHT:'563',  DPAD_OK:  '564',
+            KEY_0: '574', KEY_1: '565', KEY_2: '566', KEY_3: '567',
+            KEY_4: '568', KEY_5: '569', KEY_6: '570', KEY_7: '571',
+            KEY_8: '572', KEY_9: '573',
+            KEY_HOME: '1486', KEY_MENU: '1487', KEY_BACK: '1478'
+        }
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / BeIN / Freesat — fires
+     * BEFORE the receiver-remote view is shown, so SIMPL can switch the
+     * AV matrix to that source. Per-page; leave '' for UI-only.         */
+    LAUNCHERS: {
+        OSN:     '896',   // D -> tapping OSN launcher
+        BEIN:    '898',   // D -> tapping BeIN launcher
+        FREESAT: '895'    // D -> tapping Freesat launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '',
+        VOL_UP:    '',
+        VOL_DOWN:  '',
+        MUTE:      '',
+        POWER_OFF: ''
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J2 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page2.js loaded
+ * after this file with a plain <script src="page2.js"></script>.
+ * We ALSO assign it to window.J2 so:
+ *   - you can probe it in the browser console as window.J2
+ *   - page2.js's `typeof window.J2` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J2 → J<N> AND window.J2 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J2 = J2;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J2;
+}
+/* page2.js — Smart Home Control (4 Widgets) — PAGE 2
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins2.js              ║
+ * ║  and accessed here via the global constant object   J2           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins2.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J2               →   J<N>            (e.g. J2)             │
+ * │           window.J2        →   window.J2<N>     (e.g. window.J2)      │
+ * │           joins2.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page2            →   page<N>         (e.g. page2)          │
+ * │           page2Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 2 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page2.html — MUST be in this order):
+ *   1. joins2.js    ← sets window.J2
+ *   2. page2.js     ← reads window.J2
+ */
+
+const page2Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page2.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page2' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page2';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page2-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins2.js (window.J2) into a local
+    //  const so the rest of the file just writes  J2.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J2 and window.J2 to J<N> /
+    //                       window.J2<N> on this single line.
+    const J2 = (typeof window !== 'undefined' && window.J2)
+        ? window.J2
+        : (typeof J2 !== 'undefined' ? J2 : null);
+
+    // ====================== GUARD ======================
+    if (!J2) {
+        console.error(
+            '[page2.js] window.J2 is not defined.\n' +
+            'joins2.js must be loaded BEFORE page2.js.\n' +
+            'Fix load order in page2.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J2.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J2 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J2 is always usable (real map or proxy stub).
+    const JOINS = J2 || window.J2;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page2('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page2('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page2('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page2('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J2 map declared in joins2.js
+     * (e.g. 'AC.SP_SEND' resolves J2.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins2.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page2` → `_page<N>` and `J2` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page2(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J2);
+    }
+    window.tap_page2 = function (joinPath, ms) {
+        const join = _resolveJoin_page2(joinPath);
+        if (!join) { console.warn('[tap_page2] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page2 = function (joinPath, value) {
+        const join = _resolveJoin_page2(joinPath);
+        if (!join) { console.warn('[set_page2] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page2 = function (joinPath, value) {
+        const join = _resolveJoin_page2(joinPath);
+        if (!join) { console.warn('[send_page2] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
     const DEFAULT_CATALOG = {
         on:      { label: 'All On',    icon: '💡', color: 'on'      },
         off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
@@ -3755,8 +7072,7 @@ const page1Module = (() => {
     };
 
     function catalog() {
-        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) ||
-               DEFAULT_CATALOG;
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
     }
 
     function presetInfo(key) {
@@ -3764,36 +7080,16 @@ const page1Module = (() => {
         return cat[key] || { label: key, icon: '•', color: 'generic' };
     }
 
-    // "tv" → "Tv" (so data-join-tv → dataset.joinTv)
     function capitalize(s) {
         return s.charAt(0).toUpperCase() + s.slice(1);
     }
 
     // ====================== LONG-PRESS HELPER ======================
-    // How long the user must hold an area-card body before the popup opens.
-    // Change this value (milliseconds) to tune the hold duration. The CSS
-    // progress-fill animation (.area-card::before) MUST match — see
-    // `transition: transform <LONG_PRESS_MS>` in page1.css.
-    const LONG_PRESS_MS = 600;
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
 
-    // Movement (in pixels) that cancels the hold. Prevents accidental
-    // long-presses when the user is scrolling.
-    const LONG_PRESS_CANCEL_PX = 10;
-
-    /**
-     * Attach a long-press handler to an element.
-     *   callback(element)  fires after `ms` ms of sustained press
-     * Cancels on pointerup / pointercancel / pointerleave, on movement
-     * beyond the threshold, or when the user starts on the lamp button.
-     *
-     * Uses Pointer Events so it works uniformly on touch + mouse + pen.
-     */
     function attachLongPress(el, callback, ms) {
-        let timer       = null;
-        let startX      = 0;
-        let startY      = 0;
-        let didFire     = false;
-        let pressActive = false;
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
 
         function clear() {
             if (timer) { clearTimeout(timer); timer = null; }
@@ -3802,18 +7098,11 @@ const page1Module = (() => {
         }
 
         el.addEventListener('pointerdown', (e) => {
-            // Don't trigger long-press when the user taps the lamp icon
-            // (it's the ON/OFF toggle) or any explicit inner button.
-            if (e.target.closest('.acard-bulb') ||
-                e.target.closest('button.acard-bulb')) return;
+            if (e.target.closest('.acard-switch')) return;
             if (e.button !== undefined && e.button !== 0) return;
-
-            didFire     = false;
-            pressActive = true;
-            startX = e.clientX;
-            startY = e.clientY;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
             el.classList.add('lp-holding');
-
             timer = setTimeout(() => {
                 timer = null;
                 if (!pressActive) return;
@@ -3825,34 +7114,195 @@ const page1Module = (() => {
 
         el.addEventListener('pointermove', (e) => {
             if (!pressActive) return;
-            const dx = Math.abs(e.clientX - startX);
-            const dy = Math.abs(e.clientY - startY);
-            if (dx > LONG_PRESS_CANCEL_PX || dy > LONG_PRESS_CANCEL_PX) {
-                clear();
-            }
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
         });
 
-        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => {
-            el.addEventListener(ev, clear);
-        });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
 
-        // Suppress the browser's native long-press context menu on touch
-        // devices so our own progress-fill is what the user sees.
         el.addEventListener('contextmenu', (e) => {
             if (didFire || pressActive) e.preventDefault();
         });
     }
 
     // ====================== STATE ======================
-    const areaState = {};          // key → { element, presets, joins, analog, fb, ... }
-    let   currentPanelArea = null;
-    let   panelPortalDone  = false;
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins2 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins2.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        livingroom:  'LIGHTS_LIVING',
+        terrace: 'LIGHTS_TERRACE',
+        corridor: 'LIGHTS_CORRIDOR'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J2.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins2.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins2.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards / rows ───────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins2.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins2.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins2.js takes effect.
+                // (val is falsy when the key is missing from joins2.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins2.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins2.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page2 = 0;
+    let _hbTicker_page2 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page2 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page2 = Date.now();
+        subBool(hb, () => { _hbLast_page2 = Date.now(); });
+
+        if (_hbTicker_page2) clearInterval(_hbTicker_page2);
+        _hbTicker_page2 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page2) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
 
     // ====================== INIT ======================
     function onInit() {
-        console.log('✅ Page 1 Initialized (v5 — pill cards + long-press)');
-
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 2 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins2.js
         ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
         buildAreaState();
         setupWidgetNav();
         setupGlobalLightsPresets();
@@ -3860,70 +7310,148 @@ const page1Module = (() => {
         setupShades();
         setupAC();
         setupTV();
+        setupMusic();
         setupFeedbackSubscriptions();
-        startClock();
+        setupHubLink();
         requestCurrentStatus();
         notifyActivePage();
     }
 
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
     function ensurePanelClosed() {
-        document.getElementById('areaPanel')       ?.classList.remove('open');
-        document.getElementById('areaPanelOverlay')?.classList.remove('open');
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
     }
 
-    /**
-     * Move the panel + overlay to become direct children of <body>.
-     * This ensures position:fixed always works, even if some ancestor
-     * (common in CH5 shells) has a transform/filter/perspective that would
-     * otherwise make it positioned relative to that ancestor instead of
-     * the viewport.  Done once, on first open.
-     */
     function portalPanelToBody() {
         if (panelPortalDone) return;
-        const panel   = document.getElementById('areaPanel');
-        const overlay = document.getElementById('areaPanelOverlay');
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
         if (!panel || !overlay) return;
         document.body.appendChild(overlay);
         document.body.appendChild(panel);
         panelPortalDone = true;
     }
 
+    let areaShutdownPortalDone = false;
     // ====================== WIDGET MANAGEMENT ======================
-    function setupWidgetNav() {
-        const firstTab = document.querySelector('.tab-btn.active');
-        if (firstTab) {
-            const name = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(name, firstTab);
-        }
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page2, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
     }
 
-    window.switchWidget = function (widgetName, clickedBtn) {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page2
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page2(widgetName, target);
+    }
+
+    window.switchWidget_page2 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
-
-        document.querySelectorAll('.widget').forEach(w => w.classList.remove('active'));
-        const active = document.getElementById('widget-' + widgetName);
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
         if (active) active.classList.add('active');
-
-        sendSerial('active_widget_name', widgetName);
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J2.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
     };
 
-    window.switchTVSubWidget = function (subwidgetName, clickedBtn) {
-        document.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+    window.switchTVSubWidget_page2 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
-
-        document.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
-        const el = document.getElementById(subwidgetName);
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page2' / 'tv-favorites-page2'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
         if (el) el.classList.add('active');
     };
 
-    // ====================== SHARED: TOGGLE TILES (AC) ======================
-    window.toggleTile = function (name, cls) {
+    window.toggleTile_page2 = function (name, cls) {
         const tog  = document.getElementById('tog-' + name);
         const tile = document.getElementById('tile-' + name);
         const lbl  = document.getElementById('lbl-' + name);
         if (!tog || !tile || !lbl) return;
-
         const isOn = tog.checked;
         tile.classList.toggle(cls, isOn);
         lbl.textContent = isOn ? 'ON' : 'OFF';
@@ -3931,333 +7459,465 @@ const page1Module = (() => {
 
     // ====================== LIGHTS: BUILD STATE FROM DOM ======================
     function buildAreaState() {
-        const cards = document.querySelectorAll('.area-card');
-        cards.forEach(card => {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
             const key = card.dataset.area;
             if (!key) return;
 
-            // 1) Which presets does this room offer?
-            const presetsAttr = (card.dataset.presets || '').trim();
-            const presetKeys = presetsAttr
-                ? presetsAttr.split(',').map(s => s.trim()).filter(Boolean)
-                : [];
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
 
-            // 2) Build the join map for those presets.
-            //    data-join-<key>  →  card.dataset.join<Key>
-            const joins = {};
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J2.LIGHTS_<AREA>.<PRESET> in joins2.js.
+            const presetJoinMap = {};
             presetKeys.forEach(pk => {
-                const attr = 'join' + capitalize(pk);
-                const j = (card.dataset[attr] || '').trim();
-                if (j) joins[pk] = j;
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
             });
 
-            // 3) Optional per-card label override: data-label-<key>="My Name"
             const overrideLabels = {};
             presetKeys.forEach(pk => {
-                const attr = 'label' + capitalize(pk);
-                const v = (card.dataset[attr] || '').trim();
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
                 if (v) overrideLabels[pk] = v;
             });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J2.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
 
             areaState[key] = {
                 element: card,
                 label:   card.dataset.label || key,
                 icon:    card.dataset.icon  || '💡',
                 presets: presetKeys,
-                joins:   joins,
+                joins:   presetJoinMap,
                 labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
                 analog:  card.dataset.analog || null,
                 fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
                 isOn:    false,
                 preset:  'off',
-                level:   0
+                chLevels: {},
+                chStates: {}
             };
 
-            // 4) Long-press on the card body → open the detail popup.
-            attachLongPress(card, (el) => {
-                window.openAreaPanel(el, null);
-            }, LONG_PRESS_MS);
+            attachLongPress(card, (el) => window.openAreaPanel_page2(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
         });
         updateOnCountBadge();
     }
 
-    /** Return the display label for a preset, honoring per-card overrides. */
     function labelFor(areaKey, presetKey) {
         const st = areaState[areaKey];
-        if (st && st.labelOverrides && st.labelOverrides[presetKey]) {
-            return st.labelOverrides[presetKey];
-        }
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
         return presetInfo(presetKey).label;
     }
 
     // ====================== LIGHTS: GLOBAL PRESET BAR ======================
     function setupGlobalLightsPresets() {
-        document.getElementById('globalAllOn')?.addEventListener('click', () => {
-            pulse('100');
-            applyAllAreas('on');
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J2.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
         });
-        document.getElementById('globalRelax')?.addEventListener('click', () => {
-            pulse('101');
-            applyAllAreas('relax');
+
+        // J2.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
         });
-        document.getElementById('globalDim')?.addEventListener('click', () => {
-            pulse('102');
-            applyAllAreas('dim');
+
+        // J2.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
         });
-        document.getElementById('globalAllOff')?.addEventListener('click', () => {
-            pulse('103');
-            applyAllAreas('off');
+
+        // J2.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
         });
     }
 
     // ====================== LIGHTS: VISUAL STATE ======================
-    /** Apply a preset visually to every area that supports it. */
     function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
         Object.keys(areaState).forEach(k => {
             const st = areaState[k];
             if (!st.presets.includes(preset)) return;
-            setAreaVisual(k, preset);
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
         });
     }
 
     function setAreaVisual(key, preset) {
         const st = areaState[key];
         if (!st) return;
-
         st.preset = preset;
         st.isOn   = (preset !== 'off');
-
         const card = st.element;
-
-        // Visual class: on/dim styles brighter, everything-not-off uses "alit",
-        // relax is a warmer tint kept for backward-compat.
-        card.classList.remove('alit', 'arelax');
-        if (preset === 'off') {
-            /* no highlight */
-        } else if (preset === 'relax') {
-            card.classList.add('arelax');
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
         } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
             card.classList.add('alit');
         }
-
-        // Reflect on/off on the lamp button for a11y (pressed state)
-        const bulb = document.getElementById('abulb-' + key);
-        if (bulb) bulb.setAttribute('aria-pressed', st.isOn ? 'true' : 'false');
-
-        // If the panel is currently showing this area, sync it too
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
         if (currentPanelArea === key) refreshPanelStatus();
-
         updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
     }
 
     function updateOnCountBadge() {
-        const badge = document.getElementById('lightsOnCount');
-        if (!badge) return;
-        const count = Object.values(areaState).filter(s => s.isOn).length;
-        badge.textContent = count + ' on';
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
     }
 
     // ====================== LIGHTS: AREA PANEL ======================
 
-    /** Build the preset buttons for the currently-open area. */
-    function renderPanelPresets(areaKey) {
-        const grid = document.getElementById('panelPresetGrid');
-        if (!grid) return;
-        grid.innerHTML = '';
-
-        const st = areaState[areaKey];
-        if (!st) return;
-
-        st.presets.forEach(pk => {
-            const info = presetInfo(pk);
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'preset-btn preset-' + (info.color || 'generic');
-            btn.dataset.preset = pk;
-            btn.innerHTML =
-                '<span class="preset-ico">' + (info.icon || '•') + '</span>' +
-                '<span class="preset-lbl">' + labelFor(areaKey, pk) + '</span>';
-            btn.addEventListener('click', () => sendAreaPreset(pk));
-            grid.appendChild(btn);
-        });
-    }
-
-    /**
-     * Open the shared popup for the area whose card was long-pressed.
-     * Positioning: fixed + centered in the current viewport.
-     *
-     * v5: this is now invoked ONLY by the long-press handler, not from a
-     * direct click. The `event` parameter is kept for backward compat (some
-     * callers still pass a click event) and to allow guarding against taps
-     * on the lamp icon.
-     */
-    window.openAreaPanel = function (cardEl, event) {
-        // Ignore triggers that came from the lamp toggle itself
-        if (event && event.target &&
-            event.target.closest('.acard-bulb')) {
-            return;
-        }
-
+    window.openAreaPanel_page2 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
         const key = cardEl.dataset.area;
-        const st = areaState[key];
+        const st  = areaState[key];
         if (!st) return;
 
         portalPanelToBody();
         currentPanelArea = key;
 
-        // Header
-        document.getElementById('panelIco').textContent   = st.icon;
-        document.getElementById('panelTitle').textContent = st.label;
-        document.getElementById('panelSub').textContent   = 'Lighting Control';
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
 
-        // Preset buttons — built fresh from this area's preset list
-        renderPanelPresets(key);
-
-        // Dimmer visibility + join labels
-        const dimmerEl = document.getElementById('panelDimmer');
-        if (st.analog) {
-            dimmerEl.classList.remove('hidden');
-            document.getElementById('panelDimJoin').textContent = 'Analog Join ' + st.analog;
-            document.getElementById('panelDimHint').textContent =
-                'Feedback ← Analog Join ' + (st.fb || '—');
-
-            const level  = st.level || 0;
-            const slider = document.getElementById('panelDimSlider');
-            if (slider) slider.value = level;
-            document.getElementById('panelDimValue').textContent = level;
-            updatePanelDial(level);
-        } else {
-            dimmerEl.classList.add('hidden');
-        }
+        renderPanelChannels(key);
 
         refreshPanelStatus();
-
-        document.getElementById('areaPanelOverlay').classList.add('open');
-        document.getElementById('areaPanel').classList.add('open');
-
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
         document.body.style.overflow = 'hidden';
 
-        sendSerial('active_area_name', st.label);
+        // J2.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
     };
 
-    window.closeAreaPanel = function () {
-        document.getElementById('areaPanelOverlay').classList.remove('open');
-        document.getElementById('areaPanel').classList.remove('open');
+    window.closeAreaPanel_page2 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
         document.body.style.overflow = '';
         currentPanelArea = null;
     };
 
-    // Escape key closes the panel
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && currentPanelArea) {
-            window.closeAreaPanel();
-        }
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page2();
     });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<div class="ch-name">' + escAttr(ch.label) + '</div>' +
+                  (ch.ON || ch.OFF ?
+                    '<div class="ch-onoff">' +
+                      '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                              ' data-ch-on="' + (ch.ON || '') + '"' +
+                              ' aria-label="' + ch.label + ' on">ON</button>' +
+                      '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                              ' data-ch-off="' + (ch.OFF || '') + '"' +
+                              ' aria-label="' + ch.label + ' off">OFF</button>' +
+                    '</div>'
+                  : '') +
+                '</div>' +
+                (ch.DIM_SEND ?
+                  '<div class="ch-dim-wrap">' +
+                    '<div class="ch-dim-track">' +
+                      '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                           ' style="width:' + lvl + '%"></div>' +
+                      '<input type="range" class="ch-dim-slider"' +
+                             ' data-ch-send="' + ch.DIM_SEND + '"' +
+                             ' data-ch-idx="' + i + '"' +
+                             ' min="0" max="100" value="' + lvl + '"' +
+                             ' aria-label="' + ch.label + ' dimmer">' +
+                    '</div>' +
+                    '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                  '</div>'
+                : '');
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
 
     function refreshPanelStatus() {
         if (!currentPanelArea) return;
-        const st = areaState[currentPanelArea];
-        if (!st) return;
-
-        const pill = document.getElementById('panelStatusPill');
-        const txt  = document.getElementById('panelStatusText');
-        if (!pill || !txt) return;
-
-        // Status pill styling: on=green, off=red, everything-else=warm
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
         pill.className = 'spill';
-        if (st.preset === 'on')       pill.classList.add('sp-on');
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
         else if (st.preset === 'off') pill.classList.add('sp-off');
         else                          pill.classList.add('sp-dim');
-
         txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
-
-        // Highlight the active preset button (if it's in the current grid)
-        document.querySelectorAll('#panelPresetGrid .preset-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.preset === st.preset);
-        });
     }
 
     // ====================== LIGHTS: PANEL CONTROLS ======================
+    /* Single delegated 'input' listener on #panelDimmers - handles every
+     * dimmer channel. Each .dim-row-slider carries its channel key + send
+     * join in data-* so the listener can route updates without per-row
+     * closures (cleaner when rows are dynamically rebuilt by openAreaPanel). */
     function setupAreaPanelControls() {
-        // Preset buttons are attached dynamically in renderPanelPresets().
-        // Only the dimmer slider is wired here (static DOM element).
-        const slider = document.getElementById('panelDimSlider');
-        slider?.addEventListener('input', (e) => {
-            if (!currentPanelArea) return;
-            const st = areaState[currentPanelArea];
-            if (!st || !st.analog) return;
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
 
-            const v = parseInt(e.target.value, 10);
-            st.level = v;
-            document.getElementById('panelDimValue').textContent = v;
-            updatePanelDial(v);
-            sendAnalog(st.analog, v);
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
         });
     }
 
-    function sendAreaPreset(preset) {
-        if (!currentPanelArea) return;
-        const st = areaState[currentPanelArea];
-        if (!st) return;
-
-        const join = st.joins[preset];
-        if (join) {
-            pulse(join);
-        } else {
-            console.warn('[lights] No join configured for preset "' + preset +
-                         '" on area "' + currentPanelArea + '"');
-        }
-
-        // Optimistic UI (reconciled by feedback sub if configured)
-        setAreaVisual(currentPanelArea, preset);
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
     }
 
-    // ====================== LIGHTS: LAMP-ICON ON/OFF TOGGLE ======================
-    /**
-     * v5 — the lamp icon IS the on/off toggle. Tapping it flips between
-     * the 'on' and 'off' presets for that room and updates the visual.
-     * `event.stopPropagation()` prevents the tap from being interpreted
-     * as the start of a long-press on the card body.
-     */
-    window.handleAreaLampToggle = function (key, event) {
-        if (event) event.stopPropagation();
 
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page2 = function (key, event) {
+        if (event) event.stopPropagation();
         const st = areaState[key];
         if (!st) return;
-
-        const wantOn = !st.isOn;
-        const preset = wantOn ? 'on' : 'off';
-
-        const join = st.joins[preset];
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
         if (join) {
-            pulse(join);
+            pulse(join); // join = data-join-on/off on card = J2.LIGHTS_<AREA>.ON/OFF
         } else {
-            console.warn('[lights] Lamp tapped but no data-join-' + preset +
-                         ' on area "' + key + '"');
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
         }
-
         setAreaVisual(key, preset);
     };
 
     // ====================== LIGHTS: PANEL ARC DIAL ======================
     function updatePanelDial(pct) {
-        const fill  = document.getElementById('panel-arc-fill');
-        const label = document.getElementById('panel-arc-label');
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
         if (!fill) return;
-
         const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
         const ex = cx + r * Math.cos(rad);
         const ey = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            const largeArc = pct > 50 ? 1 : 0;
-            fill.setAttribute('d', `M 24 105 A 76 76 0 ${largeArc} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
         }
         if (label) label.textContent = pct + '%';
     }
@@ -4265,26 +7925,23 @@ const page1Module = (() => {
     // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
     function setupLightsFeedback() {
         if (!hasCrestron()) return;
-
         Object.keys(areaState).forEach(key => {
             const st = areaState[key];
 
-            // Analog dimmer feedback (0-100)
-            if (st.fb) {
-                subAnalog(st.fb, (val) => {
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
                     const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
-                    st.level = v;
-                    if (currentPanelArea === key) {
-                        const slider = document.getElementById('panelDimSlider');
-                        if (slider) slider.value = v;
-                        document.getElementById('panelDimValue').textContent = v;
-                        updatePanelDial(v);
-                    }
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
                 });
-            }
+            });
 
-            // Digital feedback — for EVERY preset this room supports.
-            // Convention: feedback join = send join + 100.
+            // D ← preset feedback (join = send join + 100, per convention in joins2.js)
             const FB_OFFSET = 100;
             st.presets.forEach(preset => {
                 const sendJoin = st.joins[preset];
@@ -4298,210 +7955,125 @@ const page1Module = (() => {
     }
 
     // ====================== SHADES ======================
-    /**
-     * Custom drag-thumb control — no <input type="range">.
-     * The thumb IS the stop button:
-     *   • TAP  (< STOP_MARGIN px movement)  → pulse stop join
-     *   • DRAG UP / RIGHT past DEAD_ZONE    → pulse open join (once per drag)
-     *   • DRAG DOWN / LEFT past DEAD_ZONE   → pulse close join (once per drag)
-     *   • RELEASE                           → thumb springs back to centre
-     */
-    const STOP_MARGIN = 8;   // px — max movement still treated as a tap
-    const DEAD_ZONE   = 22;  // px from start before direction fires
-
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page2.html
+    // and must match the J2.SHADES.* constants in joins2.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
     const shadeState = {};
 
     function setupShades() {
-        document.querySelectorAll('.shade-card').forEach(card => buildShadeCard(card));
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
         updateShadesOpenCount();
     }
 
     function buildShadeCard(card) {
-        const key         = card.dataset.shade;
-        const label       = card.dataset.label       || 'Shade';
-        const icon        = card.dataset.icon        || '🪟';
-        const joinOpen    = card.dataset.joinOpen;
-        const joinClose   = card.dataset.joinClose;
-        const joinStop    = card.dataset.joinStop;
-        const joinPos     = card.dataset.joinPos;
-        const joinFb      = card.dataset.joinFb;
-        const isVert      = (card.dataset.orientation || 'vertical') === 'vertical';
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J2.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J2.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J2.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J2.SHADES.<n>_FB
 
-        shadeState[key] = { pos: 0, isOpen: false };
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
 
         card.innerHTML = `
           <div class="sc-top">
             <span class="sc-icon">${icon}</span>
             <div class="sc-info">
               <div class="sc-name">${label}</div>
-              <div class="sc-status" id="sstat-${key}">
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
                 <span class="sc-dot"></span>
-                <span id="sstat-txt-${key}">–</span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
               </div>
             </div>
-            
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
           </div>
-
-          <div class="sc-track-wrap sc-orient-${isVert ? 'vert' : 'horz'}" id="strack-${key}">
-            <div class="sc-track-bg">
-              <div class="sc-track-fill" id="sfill-${key}"></div>
-            </div>
-            <div class="sc-labels ${isVert ? 'sc-labels-vert' : 'sc-labels-horz'}">
-              <span>${isVert ? '↑ Open' : '← Close'}</span>
-              <span>${isVert ? '↓ Close' : '→ Open'}</span>
-            </div>
-            <div class="sc-thumb" id="sthumb-${key}">
-              <span class="sc-thumb-label">STOP</span>
-            </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
           </div>
-
-          <div class="sc-hint-row">
-            <span class="sc-hint">${isVert ? 'drag ↑↓ · tap = stop' : 'drag ←→ · tap = stop'}</span>
-            <span class="sc-join-hint">FB ← J${joinFb || '–'}</span>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
           </div>
         `;
 
-        wireShadeControl(card, key, isVert, joinOpen, joinClose, joinStop, joinPos, joinFb);
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
 
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J2.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
         if (joinFb && hasCrestron()) {
             subAnalog(joinFb, (val) => {
                 const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
-                shadeState[key].pos    = v;
-                shadeState[key].isOpen = v > 5;
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
                 updateShadeFeedback(key, v);
                 updateShadesOpenCount();
             });
         }
     }
 
-    function wireShadeControl(card, key, isVert, joinOpen, joinClose, joinStop, joinPos, joinFb) {
-        const thumb = document.getElementById('sthumb-' + key);
-        const fill  = document.getElementById('sfill-'  + key);
-        const wrap  = document.getElementById('strack-' + key);
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
 
-        let dragStart = null;
-        let hasFired  = false;
-        let pointerId = null;
-
-        thumb.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            thumb.setPointerCapture(e.pointerId);
-            pointerId  = e.pointerId;
-            dragStart  = { x: e.clientX, y: e.clientY };
-            hasFired   = false;
-            thumb.style.transition = '';
-            thumb.classList.add('sc-thumb-active');
-        });
-
-        thumb.addEventListener('pointermove', (e) => {
-            if (!dragStart || e.pointerId !== pointerId) return;
-            e.preventDefault();
-
-            const dx   = e.clientX - dragStart.x;
-            const dy   = e.clientY - dragStart.y;
-            const dist = isVert ? -dy : dx;   // positive = open direction
-
-            const trackLen  = isVert ? wrap.offsetHeight : wrap.offsetWidth;
-            const maxTravel = Math.min(trackLen * 0.38, 80);
-            const clamped   = Math.max(-maxTravel, Math.min(maxTravel, dist));
-
-            // Move thumb — keep both centring axes
-            thumb.style.transform = isVert
-                ? `translateX(-50%) translateY(calc(-50% + ${-clamped}px))`
-                : `translateX(calc(-50% + ${clamped}px)) translateY(-50%)`;
-
-            // Animated fill from centre
-            const fillPct = Math.abs(clamped) / maxTravel * 44;
-            fill.style.transition = 'none';
-            if (isVert) {
-                fill.style.width  = '100%';
-                fill.style.left   = '0';
-                fill.style.right  = 'auto';
-                if (clamped >= 0) {
-                    fill.style.bottom = '50%'; fill.style.top = 'auto';
-                    fill.style.height = fillPct + '%';
-                } else {
-                    fill.style.top = '50%'; fill.style.bottom = 'auto';
-                    fill.style.height = fillPct + '%';
-                }
-            } else {
-                fill.style.height = '100%';
-                fill.style.top    = '0';
-                fill.style.bottom = 'auto';
-                if (clamped >= 0) {
-                    fill.style.left  = '50%'; fill.style.right = 'auto';
-                    fill.style.width = fillPct + '%';
-                } else {
-                    fill.style.right = '50%'; fill.style.left = 'auto';
-                    fill.style.width = fillPct + '%';
-                }
-            }
-
-            // Colour hint on thumb
-            if (clamped > DEAD_ZONE / 2) {
-                thumb.classList.add('sc-thumb-toward-open');
-                thumb.classList.remove('sc-thumb-toward-close');
-            } else if (clamped < -DEAD_ZONE / 2) {
-                thumb.classList.add('sc-thumb-toward-close');
-                thumb.classList.remove('sc-thumb-toward-open');
-            } else {
-                thumb.classList.remove('sc-thumb-toward-open', 'sc-thumb-toward-close');
-            }
-
-            // Fire direction once past dead-zone
-            if (!hasFired && Math.abs(dist) > DEAD_ZONE) {
-                hasFired = true;
-                if (dist > 0) {
-                    pulse(joinOpen);
-                    setShadeStatusText(key, '▲ Opening…');
-                    setShadeCardState(card, 'moving');
-                } else {
-                    pulse(joinClose);
-                    setShadeStatusText(key, '▼ Closing…');
-                    setShadeCardState(card, 'moving');
-                }
-            }
-        });
-
-        const onUp = (e) => {
-            if (!dragStart || e.pointerId !== pointerId) return;
-
-            const dx       = e.clientX - dragStart.x;
-            const dy       = e.clientY - dragStart.y;
-            const moveDist = Math.sqrt(dx * dx + dy * dy);
-
-            if (moveDist < STOP_MARGIN) {
-                pulse(joinStop);
-                setShadeStatusText(key, '⏹ Stopped');
-                setShadeCardState(card, 'stopped');
-            }
-
-            // Spring back — both axes
-            thumb.style.transition = 'transform 0.35s cubic-bezier(0.34,1.56,0.64,1)';
-            thumb.style.transform  = 'translateX(-50%) translateY(-50%)';
-
-            fill.style.transition = 'height 0.2s ease, width 0.2s ease';
-            fill.style.height = '0';
-            fill.style.width  = '0';
-
-            thumb.classList.remove('sc-thumb-active', 'sc-thumb-toward-open', 'sc-thumb-toward-close');
-
-            setTimeout(() => {
-                thumb.style.transition = '';
-                fill.style.transition  = '';
-            }, 380);
-
-            dragStart = null;
-            hasFired  = false;
-            pointerId = null;
-        };
-
-        thumb.addEventListener('pointerup',     onUp);
-        thumb.addEventListener('pointercancel', onUp);
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
     }
 
     function setShadeStatusText(key, text) {
-        const el = document.getElementById('sstat-txt-' + key);
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
         if (el) el.textContent = text;
     }
 
@@ -4510,234 +8082,543 @@ const page1Module = (() => {
         if (state) card.classList.add('sc-s-' + state);
     }
 
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
     function updateShadeFeedback(key, pos) {
-        const badge = document.getElementById('spos-' + key);
-        if (badge) badge.textContent = pos + '%';
-        const card = document.querySelector(`[data-shade="${key}"]`);
+        const card = _qs(`[data-shade="${key}"]`);
         if (card) {
             if      (pos >= 95) setShadeCardState(card, 'open');
             else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
         }
         setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
     }
 
     function updateShadesOpenCount() {
-        const badge = document.getElementById('shadesOpenCount');
-        if (!badge) return;
-        const n = Object.values(shadeState).filter(s => s.isOpen).length;
-        badge.textContent = n + ' open';
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
     }
 
-    // ====================== AC ======================
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page2 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page2' / 'ac-heater-page2'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
     function setupAC() {
-        // ── State ──
-        let acOn       = true;
-        let acSetTemp  = 17;   // default target temp
-        let acMode     = 'cool';
-        let acFan      = 'high';
-        const AC_MIN   = 16;
-        const AC_MAX   = 30;
 
-        // ── Elements ──
-        const card       = document.querySelector('.ac-card');
-        const powerBtn   = document.getElementById('acPowerBtn');
-        const dialTemp   = document.getElementById('acDialTemp');
-        const arcPath    = document.getElementById('acArcPath');
-        const trackBg    = document.getElementById('acTrackBg');
-        const ticksG     = document.getElementById('acTicks');
-        const decBtn     = document.getElementById('acDecBtn');
-        const incBtn     = document.getElementById('acIncBtn');
-        const modeBtns   = document.querySelectorAll('.ac-mode-btn');
-        const fanBtns    = document.querySelectorAll('.ac-fan-btn');
-        const statusBadge = document.getElementById('acStatusBadge');
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J2.AC.* or J2.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
 
-        // ── SVG Arc geometry ──
-        const CX = 110, CY = 110, R = 88;
-        const START_DEG = 145;   // bottom-left
-        const END_DEG   = 35;    // bottom-right  (going clockwise the short way)
-        const TOTAL_DEG = 360 - START_DEG + END_DEG; // = 250°
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
 
-        function degToRad(d) { return (d * Math.PI) / 180; }
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page2) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
 
-        function polarPoint(deg) {
-            const rad = degToRad(deg);
-            return { x: CX + R * Math.cos(rad), y: CY + R * Math.sin(rad) };
-        }
-
-        function arcD(fromDeg, toDeg) {
-            // Always draw clockwise from fromDeg to toDeg
-            const s = polarPoint(fromDeg);
-            const e = polarPoint(toDeg);
-            // Determine large-arc: if sweep > 180 in the clockwise direction
-            let sweep = toDeg - fromDeg;
-            if (sweep < 0) sweep += 360;
-            const largeArc = sweep > 180 ? 1 : 0;
-            return `M ${s.x} ${s.y} A ${R} ${R} 0 ${largeArc} 1 ${e.x} ${e.y}`;
-        }
-
-        function buildTicks() {
-            if (!ticksG) return;
-            ticksG.innerHTML = '';
-            const STEPS = 15; // one tick per degree step
-            for (let i = 0; i <= STEPS; i++) {
-                const pct  = i / STEPS;
-                const deg  = START_DEG + pct * TOTAL_DEG;
-                const pt   = polarPoint(deg);
-                const inner = { x: CX + (R - 8) * Math.cos(degToRad(deg)),
-                                 y: CY + (R - 8) * Math.sin(degToRad(deg)) };
-                const line = document.createElementNS('http://www.w3.org/2000/svg','line');
-                line.setAttribute('x1', pt.x);
-                line.setAttribute('y1', pt.y);
-                line.setAttribute('x2', inner.x);
-                line.setAttribute('y2', inner.y);
-                line.setAttribute('stroke', 'rgba(255,255,255,0.25)');
-                line.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
-                line.setAttribute('stroke-linecap', 'round');
-                ticksG.appendChild(line);
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
             }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J2.AC.POWER_FB / J2.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J2.AC.ROOM_TEMP_FB or J2.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
         }
 
-        function updateDial() {
-            if (!arcPath || !trackBg) return;
-            const pct    = (acSetTemp - AC_MIN) / (AC_MAX - AC_MIN);
-            const endDeg = START_DEG + pct * TOTAL_DEG;
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
 
-            trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
-            arcPath.setAttribute('d', arcD(START_DEG, endDeg));
-
-            if (dialTemp) dialTemp.textContent = acSetTemp + '°';
-        }
-
-        function updatePowerUI() {
-            if (!card || !powerBtn) return;
-            powerBtn.dataset.on = acOn ? 'true' : 'false';
-            card.classList.toggle('ac-is-off', !acOn);
-            if (statusBadge) statusBadge.textContent = 'Master Robe • ' + (acOn ? 'ON' : 'OFF');
-        }
-
-        function updateModeUI() {
-            modeBtns.forEach(b => {
-                b.classList.toggle('ac-mode-active', b.dataset.mode === acMode);
-            });
-        }
-
-        function updateFanUI() {
-            fanBtns.forEach(b => {
-                b.classList.toggle('ac-fan-active', b.dataset.fan === acFan);
-            });
-        }
-
-        function flashBtn(btn) {
-            if (!btn) return;
-            btn.classList.remove('ac-flash');
-            void btn.offsetWidth; // reflow
-            btn.classList.add('ac-flash');
-            setTimeout(() => btn.classList.remove('ac-flash'), 400);
-        }
-
-        // ── Power ──
-        powerBtn?.addEventListener('click', () => {
-            acOn = !acOn;
-            updatePowerUI();
-            pulse('70');
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page2 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
         });
 
-        // ── +/- ──
-        decBtn?.addEventListener('click', () => {
-            if (!acOn) return;
-            if (acSetTemp > AC_MIN) {
-                acSetTemp--;
-                updateDial();
-                sendAnalog('41', acSetTemp);
-                flashBtn(decBtn);
-            }
+        // D → J2.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J2.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J2.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
         });
 
-        incBtn?.addEventListener('click', () => {
-            if (!acOn) return;
-            if (acSetTemp < AC_MAX) {
-                acSetTemp++;
-                updateDial();
-                sendAnalog('41', acSetTemp);
-                flashBtn(incBtn);
-            }
-        });
-
-        // ── Modes ──
-        modeBtns.forEach(btn => {
+        // AC mode buttons — data-join on each button must match J2.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!acOn) return;
+                if (!acCtrl.isOnRef()) return;
                 acMode = btn.dataset.mode;
-                updateModeUI();
-                pulse(btn.dataset.join);
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J2.AC.MODE_*
             });
         });
 
-        // ── Fan speed ──
-        fanBtns.forEach(btn => {
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J2.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!acOn) return;
+                if (!acCtrl.isOnRef()) return;
                 acFan = btn.dataset.fan;
-                updateFanUI();
-                pulse(btn.dataset.join);
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J2.AC.FAN_*
             });
         });
 
-        // ── Feedback: current room temp ──
-        subAnalog('40', (val) => {
-            const el = document.getElementById('acCurrentTemp');
-            if (el) el.textContent = Math.round(val) + '°';
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
         });
 
-        // ── Feedback: setpoint from CP ──
-        subAnalog('41', (val) => {
-            acSetTemp = Math.max(AC_MIN, Math.min(AC_MAX, Math.round(val)));
-            updateDial();
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page2 .ac-card',
+            statusBadgeId: null
         });
 
-        // ── Init ──
-        buildTicks();
-        updateDial();
-        updatePowerUI();
-        updateModeUI();
-        updateFanUI();
+        // D → J2.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J2.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J2.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
     }
 
     // ====================== TV ======================
     function setupTV() {
-        document.getElementById('tvPowerBtn')  ?.addEventListener('click', () => pulse('60'));
-        document.getElementById('tvNetflixBtn')?.addEventListener('click', () => pulse('61'));
-        document.getElementById('tvHdmiBtn')   ?.addEventListener('click', () => pulse('62'));
+        // The TV-remote (tv-controls) UI was removed; the main TV view now
+        // only shows the receiver launchers (inline onclick -> openAppPanel_page2).
+        // Wire the app-remote view buttons (joins resolved per active receiver).
+        wireAppPanelButtons();
+    }
 
-        document.getElementById('tvPowerBtn2')?.addEventListener('click', () => pulse('60'));
-        document.getElementById('tvSourceBtn')?.addEventListener('click', () => pulse('68'));
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page2, appKey1-page2) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J2.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page2.html and (b) joins2.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        freesat: { label: 'Freesat',     icon: '📡', joinKey: 'FREESAT' },
+    };
+    let _activeApp = null;
 
-        document.getElementById('tvDpadUp')   ?.addEventListener('click', () => pulse('63'));
-        document.getElementById('tvDpadDown') ?.addEventListener('click', () => pulse('64'));
-        document.getElementById('tvDpadLeft') ?.addEventListener('click', () => pulse('65'));
-        document.getElementById('tvDpadRight')?.addEventListener('click', () => pulse('66'));
-        document.getElementById('tvDpadOk')   ?.addEventListener('click', () => pulse('67'));
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
 
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
         for (let i = 0; i <= 9; i++) {
-            const btn = document.getElementById('tvKey' + i);
-            if (!btn) continue;
-            const join = '9' + String(i).padStart(2, '0');
-            btn.addEventListener('click', () => pulse(join));
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
         }
 
-        document.getElementById('tvKeyEnter')?.addEventListener('click', () => pulse('100'));
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
 
-        document.getElementById('tvVolUpBtn')  ?.addEventListener('click', () => pulse('101'));
-        document.getElementById('tvVolDownBtn')?.addEventListener('click', () => pulse('102'));
-        document.getElementById('tvMuteBtn')   ?.addEventListener('click', () => pulse('103'));
-        document.getElementById('tvChUpBtn')   ?.addEventListener('click', () => pulse('104'));
-        document.getElementById('tvChDownBtn') ?.addEventListener('click', () => pulse('105'));
+        // Power, source, vol, ch, mute — each receiver has its own joins.
+        _gid('appPowerBtn')  ?.addEventListener('click', () => pulse(appJoin('POWER')));
+        _gid('appSourceBtn') ?.addEventListener('click', () => pulse(appJoin('SOURCE')));
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(appJoin('VOL_UP')));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(appJoin('VOL_DOWN')));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(appJoin('MUTE')));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(appJoin('CH_UP')));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(appJoin('CH_DOWN')));
+    }
 
-        document.querySelectorAll('.fav-btn').forEach((btn, i) => {
-            const joinNumber = 110 + i;
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page2 and toggle via the [hidden] attr. */
+    window.openAppPanel_page2 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins2.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page2 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page2();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
             btn.addEventListener('click', () => {
-                pulse(String(joinNumber));
-                console.log(`Favorite ${i + 1} pressed → Digital Join ${joinNumber}`);
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page2(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
             });
         });
     }
@@ -4745,47 +8626,48 @@ const page1Module = (() => {
     // ====================== FEEDBACK: GLOBAL ======================
     function setupFeedbackSubscriptions() {
         if (!hasCrestron()) return;
-
         setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
     }
 
     function requestCurrentStatus() {
-        pulse('99');
+        // D → J2.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
     }
 
     function notifyActivePage() {
         if (!hasCrestron()) return;
-        CrComLib.publishEvent('b', 'active_state_class_page1', true);
+        // D → J2.SYSTEM.PAGE_ACTIVE — tell CH5 shell page2 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
     }
 
     // ====================== CLOCK ======================
-    function startClock() {
-        tick();
-        setInterval(tick, 15000);
-    }
-    function tick() {
-        const el = document.getElementById('clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-
     // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page2-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
     if (hasCrestron()) {
-        let loadedSubId = CrComLib.subscribeState(
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page2, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
             'o',
-            'ch5-import-htmlsnippet:page1-import-page',
+            'ch5-import-htmlsnippet:page2-import-page',
             (value) => {
-                if (value && value['loaded']) {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
                     onInit();
-                    setTimeout(
-                        () => CrComLib.unsubscribeState(
-                            'o',
-                            'ch5-import-htmlsnippet:page1-import-page',
-                            loadedSubId
-                        ),
-                        100
-                    );
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page2 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
                 }
             }
         );
@@ -4798,81 +8680,574 @@ const page1Module = (() => {
     }
 
     return {};
-})();/* page2.js — Smart Home Control Page 2 (4 Widgets)
- * Mirror of page1.js architecture with the following changes:
- *  - Module namespace : page2Module
- *  - All DOM IDs      : p2- prefixed (e.g. p2-areaPanel, p2-clockDisplay …)
- *  - Digital joins    : 200–299 range
- *  - Analog joins     : 200+ range (details below)
- *  - CH5 snippet      : 'ch5-import-htmlsnippet:page2-import-page'
- *  - Active-page join : active_state_class_page2
+})();
+/* ============================================================================
+ * joins3.js  —  CRESTRON JOIN MAP for PAGE 3  (Reception)
+ * ============================================================================
  *
- * ── JOIN MAP SUMMARY ──────────────────────────────────────────────────────
- *  Global Lights presets : 200 (All On) · 201 (Relax) · 202 (Dim) · 203 (All Off)
- *  Per-area presets      : defined in HTML data-joins (e.g. {"on":"210","dim":"211",…})
- *  Per-area analog send  : data-analog attribute on .area-card  (e.g. "236")
- *  Per-area analog fb    : data-fb    attribute on .area-card  (e.g. "237")
- *  Digital fb offset     : send join + 100  (same convention as page 1)
- *  Shades analog send    : 236  |  Shades analog fb : 235
- *  Shades Up/Stop/Down   : 250 / 252 / 251
- *  AC setpoint analog    : 241  |  AC room-temp fb  : 240
- *  AC Power toggle       : 270
- *  AC Modes Cool/Heat/Auto/Dry/Fan : 271-275
- *  AC Fan Low/Med/High/Auto        : 276-279
- *  AC Swing              : 281
- *  TV Power              : 260
- *  TV Netflix/HDMI       : 261 / 262
- *  TV D-Pad Up/Dn/L/R/OK : 263-267
- *  TV Source             : 268
- *  TV Num 0-9            : 200-209  (mapped as p2 keypad range)
- *  TV Vol Up/Dn/Mute     : 290 / 291 / 292  (NOTE: also used by global presets,
- *                          adjust in HTML if collision — page 1 reused 100-103)
- *  TV Ch Up/Dn           : 293 / 294
- *  TV Favorites          : 295+
- *  Request current state : pulse 299
- * ─────────────────────────────────────────────────────────────────────────
+ *   Every join number used by page3 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '900') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page3.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page3: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page3.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J3 → J<N> AND window.J3 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J3 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '',  // D -> True while this page is the visible page
+        SHUTDOWN:               '1804', // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '1803', // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page3_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page3_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_BEDROOM: {
+    },
+                                                              
+                       
+     /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page3.js.                                    */ 
+    SHADES: {
+
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+
+    },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key (e.g. NETFLIX) gets its own dpad + keypad joins so
+     * the app-specific remote in the popup can talk to the right driver. */
+   APPS: {
+                                                                              
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / Apple TV / BeIN —
+     * fires BEFORE the receiver-remote view is shown, so SIMPL can switch
+     * the AV matrix to that source. Per-page; leave '' for UI-only.     */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        APPLETV: '',   // D -> tapping Apple TV launcher
+        BEIN:    ''    // D -> tapping BeIN launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '740',   // D -> AirPlay device list (also triggers AirPlay popup)
+        VOL_UP:    '744',   // D -> volume up
+        VOL_DOWN:  '745',   // D -> volume down
+        MUTE:      '746',   // D -> mute
+        POWER_OFF: '747'    // D -> power off
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J3 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page3.js loaded
+ * after this file with a plain <script src="page3.js"></script>.
+ * We ALSO assign it to window.J3 so:
+ *   - you can probe it in the browser console as window.J3
+ *   - page3.js's `typeof window.J3` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J3 → J<N> AND window.J3 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J3 = J3;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J3;
+}
+/* page3.js — Smart Home Control (4 Widgets) — PAGE 3
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins3.js              ║
+ * ║  and accessed here via the global constant object   J3           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins3.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J3               →   J<N>            (e.g. J2)             │
+ * │           window.J3        →   window.J3<N>     (e.g. window.J2)      │
+ * │           joins3.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page3            →   page<N>         (e.g. page2)          │
+ * │           page3Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 3 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page3.html — MUST be in this order):
+ *   1. joins3.js    ← sets window.J3
+ *   2. page3.js     ← reads window.J3
  */
 
-const page2Module = (() => {
+const page3Module = (() => {
     'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page3.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page3' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page3';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page3-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins3.js (window.J3) into a local
+    //  const so the rest of the file just writes  J3.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J3 and window.J3 to J<N> /
+    //                       window.J3<N> on this single line.
+    const J3 = (typeof window !== 'undefined' && window.J3)
+        ? window.J3
+        : (typeof J3 !== 'undefined' ? J3 : null);
+
+    // ====================== GUARD ======================
+    if (!J3) {
+        console.error(
+            '[page3.js] window.J3 is not defined.\n' +
+            'joins3.js must be loaded BEFORE page3.js.\n' +
+            'Fix load order in page3.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J3.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J3 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J3 is always usable (real map or proxy stub).
+    const JOINS = J3 || window.J3;
 
     // ====================== CrComLib SAFE HELPERS ======================
     const hasCrestron = () => typeof CrComLib !== 'undefined';
 
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
     function pulse(join, ms = 100) {
-        if (!hasCrestron()) return;
-        CrComLib.publishEvent('b', join, true);
-        setTimeout(() => CrComLib.publishEvent('b', join, false), ms);
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
     }
 
     function sendAnalog(join, value) {
-        if (!hasCrestron()) return;
+        if (!hasCrestron() || !join) return;
         CrComLib.publishEvent('n', join, value);
     }
 
     function sendSerial(join, text) {
-        if (!hasCrestron()) return;
+        if (!hasCrestron() || !join) return;
         CrComLib.publishEvent('s', join, text);
     }
 
     function subBool(join, cb) {
-        if (!hasCrestron()) return;
+        if (!hasCrestron() || !join) return;
         CrComLib.subscribeState('b', join, cb);
     }
 
     function subAnalog(join, cb) {
-        if (!hasCrestron()) return;
+        if (!hasCrestron() || !join) return;
         CrComLib.subscribeState('n', join, cb);
     }
 
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page3('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page3('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page3('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page3('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J3 map declared in joins3.js
+     * (e.g. 'AC.SP_SEND' resolves J3.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins3.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page3` → `_page<N>` and `J3` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page3(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J3);
+    }
+    window.tap_page3 = function (joinPath, ms) {
+        const join = _resolveJoin_page3(joinPath);
+        if (!join) { console.warn('[tap_page3] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page3 = function (joinPath, value) {
+        const join = _resolveJoin_page3(joinPath);
+        if (!join) { console.warn('[set_page3] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page3 = function (joinPath, value) {
+        const join = _resolveJoin_page3(joinPath);
+        if (!join) { console.warn('[send_page3] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
     // ====================== STATE ======================
-    const areaState = {}; // key → { element, joins, analog, fb, isOn, level, preset }
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins3 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins3.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        bedroom:  'LIGHTS_BEDROOM',
+        bathroom: 'LIGHTS_BATHROOM',
+        dressing: 'LIGHTS_DRESSING',
+        reading:  'LIGHTS_READING',
+        living:   'LIGHTS_LIVING',
+        kitchen:  'LIGHTS_KITCHEN',
+        hall:     'LIGHTS_HALL',
+        office:   'LIGHTS_OFFICE'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J3.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins3.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins3.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards / rows ───────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins3.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins3.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins3.js takes effect.
+                // (val is falsy when the key is missing from joins3.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins3.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins3.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page3 = 0;
+    let _hbTicker_page3 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page3 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page3 = Date.now();
+        subBool(hb, () => { _hbLast_page3 = Date.now(); });
+
+        if (_hbTicker_page3) clearInterval(_hbTicker_page3);
+        _hbTicker_page3 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page3) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
 
     // ====================== INIT ======================
     function onInit() {
-        console.log('✅ Page 2 Initialized');
-
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 3 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins3.js
         ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
         buildAreaState();
         setupWidgetNav();
         setupGlobalLightsPresets();
@@ -4880,58 +9255,148 @@ const page2Module = (() => {
         setupShades();
         setupAC();
         setupTV();
+        setupMusic();
         setupFeedbackSubscriptions();
-        startClock();
+        setupHubLink();
         requestCurrentStatus();
         notifyActivePage();
     }
 
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
     function ensurePanelClosed() {
-        document.getElementById('p2-areaPanel')        ?.classList.remove('open');
-        document.getElementById('p2-areaPanelOverlay') ?.classList.remove('open');
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
     }
 
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
     // ====================== WIDGET MANAGEMENT ======================
-    function setupWidgetNav() {
-        const firstTab = document.querySelector('#page2 .tab-btn.active');
-        if (firstTab) {
-            const name = firstTab.getAttribute('data-widget') || 'lights';
-            switchWidget(name, firstTab);
-        }
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page3, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
     }
 
-    // Exposed globally — called from HTML onclick on page 2 tabs.
-    // Uses p2- prefixed widget IDs to avoid collisions with page 1.
-    window.p2SwitchWidget = function (widgetName, clickedBtn) {
-        document.querySelectorAll('#page2 .tab-btn').forEach(b => b.classList.remove('active'));
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page3
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page3(widgetName, target);
+    }
+
+    window.switchWidget_page3 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
-
-        document.querySelectorAll('#page2 .widget').forEach(w => w.classList.remove('active'));
-        const active = document.getElementById('p2-widget-' + widgetName);
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
         if (active) active.classList.add('active');
-
-        sendSerial('p2_active_widget_name', widgetName);
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J3.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
     };
 
-    // Internal alias used by setupWidgetNav
-    function switchWidget(name, btn) { window.p2SwitchWidget(name, btn); }
-
-    window.p2SwitchTVSubWidget = function (subwidgetName, clickedBtn) {
-        document.querySelectorAll('#page2 .sub-tab-btn').forEach(b => b.classList.remove('active'));
+    window.switchTVSubWidget_page3 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
         if (clickedBtn) clickedBtn.classList.add('active');
-
-        document.querySelectorAll('#page2 .tv-subwidget').forEach(w => w.classList.remove('active'));
-        const el = document.getElementById('p2-' + subwidgetName);
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page3' / 'tv-favorites-page3'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
         if (el) el.classList.add('active');
     };
 
-    // ====================== SHARED: TOGGLE TILES (AC) ======================
-    window.p2ToggleTile = function (name, cls) {
-        const tog  = document.getElementById('p2-tog-'  + name);
-        const tile = document.getElementById('p2-tile-' + name);
-        const lbl  = document.getElementById('p2-lbl-'  + name);
+    window.toggleTile_page3 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
         if (!tog || !tile || !lbl) return;
-
         const isOn = tog.checked;
         tile.classList.toggle(cls, isOn);
         lbl.textContent = isOn ? 'ON' : 'OFF';
@@ -4939,224 +9404,458 @@ const page2Module = (() => {
 
     // ====================== LIGHTS: BUILD STATE FROM DOM ======================
     function buildAreaState() {
-        // Area cards live inside #page2 to avoid clashes with page 1 cards
-        const cards = document.querySelectorAll('#page2 .area-card');
-        cards.forEach(card => {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
             const key = card.dataset.area;
             if (!key) return;
 
-            let joins = {};
-            try { joins = JSON.parse(card.dataset.joins || '{}'); }
-            catch (e) { console.warn('Bad data-joins on p2', key, e); }
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J3.LIGHTS_<AREA>.<PRESET> in joins3.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J3.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
 
             areaState[key] = {
                 element: card,
                 label:   card.dataset.label || key,
                 icon:    card.dataset.icon  || '💡',
-                joins:   joins,
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
                 analog:  card.dataset.analog || null,
                 fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
                 isOn:    false,
                 preset:  'off',
-                level:   0
+                chLevels: {},
+                chStates: {}
             };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page3(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
         });
         updateOnCountBadge();
     }
 
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
     // ====================== LIGHTS: GLOBAL PRESET BAR ======================
     function setupGlobalLightsPresets() {
-        document.getElementById('p2-globalAllOn') ?.addEventListener('click', () => {
-            pulse('200');
-            applyAllAreas('on');
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J3.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
         });
-        document.getElementById('p2-globalRelax') ?.addEventListener('click', () => {
-            pulse('201');
-            applyAllAreas('relax');
+
+        // J3.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
         });
-        document.getElementById('p2-globalDim')   ?.addEventListener('click', () => {
-            pulse('202');
-            applyAllAreas('dim');
+
+        // J3.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
         });
-        document.getElementById('p2-globalAllOff')?.addEventListener('click', () => {
-            pulse('203');
-            applyAllAreas('off');
+
+        // J3.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
         });
     }
 
     // ====================== LIGHTS: VISUAL STATE ======================
     function applyAllAreas(preset) {
-        Object.keys(areaState).forEach(k => setAreaVisual(k, preset));
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
     }
 
     function setAreaVisual(key, preset) {
         const st = areaState[key];
         if (!st) return;
-
         st.preset = preset;
-        st.isOn = (preset !== 'off');
-
-        const card    = st.element;
-        const stateEl = document.getElementById('p2-astate-' + key);
-
-        card.classList.remove('alit', 'arelax');
-        if      (preset === 'on' || preset === 'dim') card.classList.add('alit');
-        else if (preset === 'relax')                  card.classList.add('arelax');
-
-        if (stateEl) {
-            stateEl.textContent =
-                preset === 'on'    ? 'ON'     :
-                preset === 'dim'   ? 'DIMMED' :
-                preset === 'relax' ? 'RELAX'  :
-                                     'OFF';
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
         }
-
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
         if (currentPanelArea === key) refreshPanelStatus();
         updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
     }
 
     function updateOnCountBadge() {
-        const badge = document.getElementById('p2-lightsOnCount');
-        if (!badge) return;
-        const count = Object.values(areaState).filter(s => s.isOn).length;
-        badge.textContent = count + ' on';
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
     }
 
     // ====================== LIGHTS: AREA PANEL ======================
-    let currentPanelArea = null;
 
-    window.p2OpenAreaPanel = function (cardEl) {
+    window.openAreaPanel_page3 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
         const key = cardEl.dataset.area;
         const st  = areaState[key];
         if (!st) return;
 
+        portalPanelToBody();
         currentPanelArea = key;
 
-        document.getElementById('p2-panelIco').textContent   = st.icon;
-        document.getElementById('p2-panelTitle').textContent = st.label;
-        document.getElementById('p2-panelSub').textContent   = 'Lighting Control';
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
 
-        const dimmerEl = document.getElementById('p2-panelDimmer');
-        if (st.analog) {
-            dimmerEl?.classList.remove('hidden');
-            document.getElementById('p2-panelDimJoin').textContent =
-                'Analog Join ' + st.analog;
-            document.getElementById('p2-panelDimHint').textContent =
-                'Feedback ← Analog Join ' + (st.fb || '—');
-
-            const level  = st.level || 0;
-            const slider = document.getElementById('p2-panelDimSlider');
-            if (slider) slider.value = level;
-            document.getElementById('p2-panelDimValue').textContent = level;
-            updatePanelDial(level);
-        } else {
-            dimmerEl?.classList.add('hidden');
-        }
+        renderPanelChannels(key);
 
         refreshPanelStatus();
-
-        document.getElementById('p2-areaPanelOverlay').classList.add('open');
-        document.getElementById('p2-areaPanel').classList.add('open');
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
         document.body.style.overflow = 'hidden';
 
-        sendSerial('p2_active_area_name', st.label);
+        // J3.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
     };
 
-    window.p2CloseAreaPanel = function () {
-        document.getElementById('p2-areaPanelOverlay').classList.remove('open');
-        document.getElementById('p2-areaPanel').classList.remove('open');
+    window.closeAreaPanel_page3 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
         document.body.style.overflow = '';
         currentPanelArea = null;
     };
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && currentPanelArea) {
-            window.p2CloseAreaPanel();
-        }
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page3();
     });
 
-    function refreshPanelStatus() {
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
         if (!currentPanelArea) return;
         const st = areaState[currentPanelArea];
         if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
 
-        const pill = document.getElementById('p2-panelStatusPill');
-        const txt  = document.getElementById('p2-panelStatusText');
-        if (!pill || !txt) return;
-
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
         pill.className = 'spill';
-        let label = 'OFF';
-        if      (st.preset === 'on')    { pill.classList.add('sp-on');  label = 'ON';    }
-        else if (st.preset === 'dim')   { pill.classList.add('sp-dim'); label = 'DIMMED'; }
-        else if (st.preset === 'relax') { pill.classList.add('sp-dim'); label = 'RELAX'; }
-        else                            { pill.classList.add('sp-off'); label = 'OFF';   }
-        txt.textContent = label;
-
-        document.querySelectorAll('#p2-areaPanel .preset-btn').forEach(b => {
-            b.classList.remove('p-active-on','p-active-dim','p-active-relax','p-active-off');
-        });
-        const btnMap = {
-            on:    ['p2-panelBtnOn',    'p-active-on'],
-            dim:   ['p2-panelBtnDim',   'p-active-dim'],
-            relax: ['p2-panelBtnRelax', 'p-active-relax'],
-            off:   ['p2-panelBtnOff',   'p-active-off']
-        };
-        const [id, cls] = btnMap[st.preset] || [];
-        if (id) document.getElementById(id)?.classList.add(cls);
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
     }
 
     // ====================== LIGHTS: PANEL CONTROLS ======================
     function setupAreaPanelControls() {
-        document.getElementById('p2-panelBtnOn')   ?.addEventListener('click', () => sendAreaPreset('on'));
-        document.getElementById('p2-panelBtnDim')  ?.addEventListener('click', () => sendAreaPreset('dim'));
-        document.getElementById('p2-panelBtnRelax')?.addEventListener('click', () => sendAreaPreset('relax'));
-        document.getElementById('p2-panelBtnOff')  ?.addEventListener('click', () => sendAreaPreset('off'));
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
 
-        const slider = document.getElementById('p2-panelDimSlider');
-        slider?.addEventListener('input', (e) => {
-            if (!currentPanelArea) return;
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
             const st = areaState[currentPanelArea];
-            if (!st || !st.analog) return;
-
-            const v = parseInt(e.target.value, 10);
-            st.level = v;
-            document.getElementById('p2-panelDimValue').textContent = v;
-            updatePanelDial(v);
-            sendAnalog(st.analog, v);
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
         });
     }
 
-    function sendAreaPreset(preset) {
-        if (!currentPanelArea) return;
-        const st = areaState[currentPanelArea];
-        if (!st) return;
-
-        const join = st.joins[preset];
-        if (join) pulse(join);
-
-        setAreaVisual(currentPanelArea, preset);
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
     }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page3 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J3.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
 
     // ====================== LIGHTS: PANEL ARC DIAL ======================
     function updatePanelDial(pct) {
-        const fill  = document.getElementById('p2-panel-arc-fill');
-        const label = document.getElementById('p2-panel-arc-label');
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
         if (!fill) return;
-
         const cx = 100, cy = 105, r = 76;
-        const deg = -180 + pct * 1.8;
-        const rad = deg * Math.PI / 180;
-        const ex  = cx + r * Math.cos(rad);
-        const ey  = cy + r * Math.sin(rad);
-
-        if (pct <= 0) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
-        } else if (pct >= 100) {
-            fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
-        } else {
-            const largeArc = pct > 50 ? 1 : 0;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
             fill.setAttribute('d',
-                `M 24 105 A 76 76 0 ${largeArc} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
         }
         if (label) label.textContent = pct + '%';
     }
@@ -5164,26 +9863,25 @@ const page2Module = (() => {
     // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
     function setupLightsFeedback() {
         if (!hasCrestron()) return;
-
         Object.keys(areaState).forEach(key => {
             const st = areaState[key];
 
-            if (st.fb) {
-                subAnalog(st.fb, (val) => {
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
                     const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
-                    st.level = v;
-                    if (currentPanelArea === key) {
-                        const slider = document.getElementById('p2-panelDimSlider');
-                        if (slider) slider.value = v;
-                        document.getElementById('p2-panelDimValue').textContent = v;
-                        updatePanelDial(v);
-                    }
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
                 });
-            }
+            });
 
-            // Digital feedback — same FB_OFFSET convention as page 1
+            // D ← preset feedback (join = send join + 100, per convention in joins3.js)
             const FB_OFFSET = 100;
-            ['on','dim','relax','off'].forEach(preset => {
+            st.presets.forEach(preset => {
                 const sendJoin = st.joins[preset];
                 if (!sendJoin) return;
                 const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
@@ -5195,86 +9893,715 @@ const page2Module = (() => {
     }
 
     // ====================== SHADES ======================
-    function setupShades() {
-        const slider = document.getElementById('p2-shadeSlider');
-        slider?.addEventListener('input', (e) => {
-            const v = parseInt(e.target.value, 10);
-            document.getElementById('p2-shadeValue').textContent = v;
-            sendAnalog('236', v);
-        });
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page3.html
+    // and must match the J3.SHADES.* constants in joins3.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
 
-        document.getElementById('p2-shadeUpBtn')  ?.addEventListener('click', () => pulse('250'));
-        document.getElementById('p2-shadeStopBtn')?.addEventListener('click', () => pulse('252'));
-        document.getElementById('p2-shadeDownBtn')?.addEventListener('click', () => pulse('251'));
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
     }
 
-    // ====================== AC ======================
-    function setupAC() {
-        const acSlider = document.getElementById('p2-acSetpointSlider');
-        acSlider?.addEventListener('input', (e) => {
-            const v = parseInt(e.target.value, 10);
-            const display = document.getElementById('p2-acSetValue');
-            if (display) display.textContent = v;
-            sendAnalog('241', v);
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J3.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J3.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J3.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J3.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
         });
 
-        document.getElementById('p2-tog-ac')?.addEventListener('change', () => pulse('270'));
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
 
-        document.getElementById('p2-acCoolBtn')?.addEventListener('click', () => pulse('271'));
-        document.getElementById('p2-acHeatBtn')?.addEventListener('click', () => pulse('272'));
-        document.getElementById('p2-acAutoBtn')?.addEventListener('click', () => pulse('273'));
-        document.getElementById('p2-acDryBtn') ?.addEventListener('click', () => pulse('274'));
-        document.getElementById('p2-acFanBtn') ?.addEventListener('click', () => pulse('275'));
+        // A ← J3.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
 
-        document.getElementById('p2-acFanLowBtn') ?.addEventListener('click', () => pulse('276'));
-        document.getElementById('p2-acFanMedBtn') ?.addEventListener('click', () => pulse('277'));
-        document.getElementById('p2-acFanHighBtn')?.addEventListener('click', () => pulse('278'));
-        document.getElementById('p2-acFanAutoBtn')?.addEventListener('click', () => pulse('279'));
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
 
-        document.getElementById('p2-acSwingBtn')?.addEventListener('click', () => pulse('281'));
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page3 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page3' / 'ac-heater-page3'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J3.AC.* or J3.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page3) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J3.AC.POWER_FB / J3.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J3.AC.ROOM_TEMP_FB or J3.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page3 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J3.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J3.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J3.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J3.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J3.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J3.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J3.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page3 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J3.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J3.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J3.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
     }
 
     // ====================== TV ======================
     function setupTV() {
-        // Quick Actions
-        document.getElementById('p2-tvPowerBtn')  ?.addEventListener('click', () => pulse('260'));
-        document.getElementById('p2-tvNetflixBtn')?.addEventListener('click', () => pulse('261'));
-        document.getElementById('p2-tvHdmiBtn')   ?.addEventListener('click', () => pulse('262'));
 
-        // Remote Power & Source
-        document.getElementById('p2-tvPowerBtn2')?.addEventListener('click', () => pulse('260'));
-        document.getElementById('p2-tvSourceBtn')?.addEventListener('click', () => pulse('268'));
+        // D -> J3.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
 
-        // D-Pad
-        document.getElementById('p2-tvDpadUp')   ?.addEventListener('click', () => pulse('263'));
-        document.getElementById('p2-tvDpadDown') ?.addEventListener('click', () => pulse('264'));
-        document.getElementById('p2-tvDpadLeft') ?.addEventListener('click', () => pulse('265'));
-        document.getElementById('p2-tvDpadRight')?.addEventListener('click', () => pulse('266'));
-        document.getElementById('p2-tvDpadOk')   ?.addEventListener('click', () => pulse('267'));
+        // D -> J3.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
 
-        // Numeric Keypad 0-9 → joins 280–289
+        // D -> J3.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J3.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J3.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page3.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
         for (let i = 0; i <= 9; i++) {
-            const btn  = document.getElementById('p2-tvKey' + i);
-            if (!btn) continue;
-            const join = String(280 + i);
-            btn.addEventListener('click', () => pulse(join));
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page3, appKey1-page3) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J3.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page3.html and (b) joins3.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        appletv: { label: 'Apple TV',    icon: '🍎', joinKey: 'APPLETV' },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        shahid:  { label: 'Shahid',      icon: '🎬', joinKey: 'SHAHID'  },
+        netflix: { label: 'Netflix',     icon: '📼', joinKey: 'NETFLIX' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
         }
 
-        document.getElementById('p2-tvKeyEnter')?.addEventListener('click', () => pulse('269'));
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
 
-        // Volume & Channel
-        document.getElementById('p2-tvVolUpBtn')  ?.addEventListener('click', () => pulse('290'));
-        document.getElementById('p2-tvVolDownBtn')?.addEventListener('click', () => pulse('291'));
-        document.getElementById('p2-tvMuteBtn')   ?.addEventListener('click', () => pulse('292'));
-        document.getElementById('p2-tvChUpBtn')   ?.addEventListener('click', () => pulse('293'));
-        document.getElementById('p2-tvChDownBtn') ?.addEventListener('click', () => pulse('294'));
+        // Volume + channel inside the popup share the existing TV joins
+        // (volume is TV hardware, not per-app). Keep the wiring here so all
+        // app-panel buttons live in one place.
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+    }
 
-        // Favorites → joins 295+
-        document.querySelectorAll('#page2 .fav-btn').forEach((btn, i) => {
-            const joinNumber = 295 + i;
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page3 and toggle via the [hidden] attr. */
+    window.openAppPanel_page3 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins3.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page3 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page3();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
             btn.addEventListener('click', () => {
-                pulse(String(joinNumber));
-                console.log(`P2 Favorite ${i + 1} pressed → Digital Join ${joinNumber}`);
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page3(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
             });
         });
     }
@@ -5282,64 +10609,12098 @@ const page2Module = (() => {
     // ====================== FEEDBACK: GLOBAL ======================
     function setupFeedbackSubscriptions() {
         if (!hasCrestron()) return;
-
         setupLightsFeedback();
-
-        // AC room temp feedback
-        subAnalog('240', (val) => {
-            const el = document.getElementById('p2-acCurrentTemp');
-            if (el) el.textContent = Math.round(val) + '°C';
-        });
-
-        // Shades position feedback
-        subAnalog('235', (val) => {
-            const v = parseInt(val, 10);
-            if (isNaN(v)) return;
-            const slider = document.getElementById('p2-shadeSlider');
-            if (slider) slider.value = v;
-            const disp = document.getElementById('p2-shadeValue');
-            if (disp) disp.textContent = v;
-        });
+        setupAreaRowFeedback();
+        setupChannelFeedback();
     }
 
     function requestCurrentStatus() {
-        pulse('299');
+        // D → J3.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
     }
 
     function notifyActivePage() {
         if (!hasCrestron()) return;
-        CrComLib.publishEvent('b', 'active_state_class_page2', true);
+        // D → J3.SYSTEM.PAGE_ACTIVE — tell CH5 shell page3 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
     }
 
     // ====================== CLOCK ======================
-    function startClock() {
-        tick();
-        setInterval(tick, 15000);
-    }
-
-    function tick() {
-        const el = document.getElementById('p2-clockDisplay');
-        if (!el) return;
-        const n = new Date();
-        el.textContent = n.getHours() + ':' + String(n.getMinutes()).padStart(2, '0');
-    }
-
     // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page3-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
     if (hasCrestron()) {
-        let loadedSubId = CrComLib.subscribeState(
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page3, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
             'o',
-            'ch5-import-htmlsnippet:page2-import-page',
+            'ch5-import-htmlsnippet:page3-import-page',
             (value) => {
-                if (value && value['loaded']) {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
                     onInit();
-                    setTimeout(
-                        () => CrComLib.unsubscribeState(
-                            'o',
-                            'ch5-import-htmlsnippet:page2-import-page',
-                            loadedSubId
-                        ),
-                        100
-                    );
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page3 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins4.js  —  CRESTRON JOIN MAP for PAGE 4  (Kitchen)
+ * ============================================================================
+ *
+ *   Every join number used by page4 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '1300') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page4.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page4: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page4.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J4 → J<N> AND window.J4 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J4 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '',  // D -> True while this page is the visible page
+        SHUTDOWN:               '1834',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '1833',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page4_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page4_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_BEDROOM: {
+    },
+
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page4.js.                                     */
+    SHADES: {
+
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+     TV: {
+    },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key (e.g. NETFLIX) gets its own dpad + keypad joins so
+     * the app-specific remote in the popup can talk to the right driver. */
+    APPS: {
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / Apple TV / BeIN —
+     * fires BEFORE the receiver-remote view is shown, so SIMPL can switch
+     * the AV matrix to that source. Per-page; leave '' for UI-only.     */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        APPLETV: '',   // D -> tapping Apple TV launcher
+        BEIN:    ''    // D -> tapping BeIN launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '710',
+        VOL_UP:    '714',
+        VOL_DOWN:  '715',
+        MUTE:      '716',
+        POWER_OFF: '717'
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J4 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page4.js loaded
+ * after this file with a plain <script src="page4.js"></script>.
+ * We ALSO assign it to window.J4 so:
+ *   - you can probe it in the browser console as window.J4
+ *   - page4.js's `typeof window.J4` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J4 → J<N> AND window.J4 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J4 = J4;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J4;
+}
+/* page4.js — Smart Home Control (4 Widgets) — PAGE 4
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins4.js              ║
+ * ║  and accessed here via the global constant object   J4           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins4.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J4               →   J<N>            (e.g. J2)             │
+ * │           window.J4        →   window.J4<N>     (e.g. window.J2)      │
+ * │           joins4.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page4            →   page<N>         (e.g. page2)          │
+ * │           page4Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 4 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page4.html — MUST be in this order):
+ *   1. joins4.js    ← sets window.J4
+ *   2. page4.js     ← reads window.J4
+ */
+
+const page4Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page4.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page4' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page4';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page4-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins4.js (window.J4) into a local
+    //  const so the rest of the file just writes  J4.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J4 and window.J4 to J<N> /
+    //                       window.J4<N> on this single line.
+    const J4 = (typeof window !== 'undefined' && window.J4)
+        ? window.J4
+        : (typeof J4 !== 'undefined' ? J4 : null);
+
+    // ====================== GUARD ======================
+    if (!J4) {
+        console.error(
+            '[page4.js] window.J4 is not defined.\n' +
+            'joins4.js must be loaded BEFORE page4.js.\n' +
+            'Fix load order in page4.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J4.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J4 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J4 is always usable (real map or proxy stub).
+    const JOINS = J4 || window.J4;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page4('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page4('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page4('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page4('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J4 map declared in joins4.js
+     * (e.g. 'AC.SP_SEND' resolves J4.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins4.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page4` → `_page<N>` and `J4` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page4(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J4);
+    }
+    window.tap_page4 = function (joinPath, ms) {
+        const join = _resolveJoin_page4(joinPath);
+        if (!join) { console.warn('[tap_page4] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page4 = function (joinPath, value) {
+        const join = _resolveJoin_page4(joinPath);
+        if (!join) { console.warn('[set_page4] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page4 = function (joinPath, value) {
+        const join = _resolveJoin_page4(joinPath);
+        if (!join) { console.warn('[send_page4] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins4 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins4.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        bedroom:  'LIGHTS_BEDROOM',
+        bathroom: 'LIGHTS_BATHROOM',
+        dressing: 'LIGHTS_DRESSING',
+        reading:  'LIGHTS_READING',
+        living:   'LIGHTS_LIVING',
+        kitchen:  'LIGHTS_KITCHEN',
+        hall:     'LIGHTS_HALL',
+        office:   'LIGHTS_OFFICE'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J4.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins4.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins4.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards / rows ───────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins4.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins4.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins4.js takes effect.
+                // (val is falsy when the key is missing from joins4.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins4.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins4.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page4 = 0;
+    let _hbTicker_page4 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page4 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page4 = Date.now();
+        subBool(hb, () => { _hbLast_page4 = Date.now(); });
+
+        if (_hbTicker_page4) clearInterval(_hbTicker_page4);
+        _hbTicker_page4 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page4) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 4 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins4.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page4, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page4
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page4(widgetName, target);
+    }
+
+    window.switchWidget_page4 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J4.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page4 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page4' / 'tv-favorites-page4'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page4 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J4.LIGHTS_<AREA>.<PRESET> in joins4.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J4.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page4(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J4.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J4.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J4.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J4.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page4 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J4.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page4 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page4();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page4 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J4.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins4.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page4.html
+    // and must match the J4.SHADES.* constants in joins4.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J4.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J4.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J4.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J4.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J4.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page4 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page4' / 'ac-heater-page4'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J4.AC.* or J4.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page4) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J4.AC.POWER_FB / J4.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J4.AC.ROOM_TEMP_FB or J4.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page4 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J4.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J4.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J4.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J4.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J4.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J4.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J4.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page4 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J4.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J4.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J4.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+
+        // D -> J4.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
+
+        // D -> J4.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
+
+        // D -> J4.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J4.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J4.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page4.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page4, appKey1-page4) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J4.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page4.html and (b) joins4.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        appletv: { label: 'Apple TV',    icon: '🍎', joinKey: 'APPLETV' },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        shahid:  { label: 'Shahid',      icon: '🎬', joinKey: 'SHAHID'  },
+        netflix: { label: 'Netflix',     icon: '📼', joinKey: 'NETFLIX' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+
+        // Volume + channel inside the popup share the existing TV joins
+        // (volume is TV hardware, not per-app). Keep the wiring here so all
+        // app-panel buttons live in one place.
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page4 and toggle via the [hidden] attr. */
+    window.openAppPanel_page4 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins4.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page4 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page4();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page4(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J4.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J4.SYSTEM.PAGE_ACTIVE — tell CH5 shell page4 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page4-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page4, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page4-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page4 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins5.js  —  CRESTRON JOIN MAP for PAGE 5  (Dining Room)
+ * ============================================================================
+ *
+ *   Every join number used by page5 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '1700') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page5.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page5: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page5.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J5 → J<N> AND window.J5 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J5 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '',  // D -> True while this page is the visible page
+        SHUTDOWN:               '1864',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '1863',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page5_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page5_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_BEDROOM: {
+    },
+
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page5.js.                                     */
+    SHADES: {
+
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+       
+       
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+
+ },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key (e.g. NETFLIX) gets its own dpad + keypad joins so
+     * the app-specific remote in the popup can talk to the right driver. */
+    APPS: {
+        
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / Apple TV / BeIN —
+     * fires BEFORE the receiver-remote view is shown, so SIMPL can switch
+     * the AV matrix to that source. Per-page; leave '' for UI-only.     */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        APPLETV: '',   // D -> tapping Apple TV launcher
+        BEIN:    ''    // D -> tapping BeIN launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '730',  // D -> open AirPlay device list
+        VOL_UP:    '734',   // D -> volume up
+        VOL_DOWN:  '735',   // D -> volume down
+        MUTE:      '736',   // D -> mute
+        POWER_OFF: '737'    // D -> power off
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J5 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page5.js loaded
+ * after this file with a plain <script src="page5.js"></script>.
+ * We ALSO assign it to window.J5 so:
+ *   - you can probe it in the browser console as window.J5
+ *   - page5.js's `typeof window.J5` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J5 → J<N> AND window.J5 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J5 = J5;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J5;
+}
+/* page5.js — Smart Home Control (4 Widgets) — PAGE 5
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins5.js              ║
+ * ║  and accessed here via the global constant object   J5           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins5.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J5               →   J<N>            (e.g. J2)             │
+ * │           window.J5        →   window.J5<N>     (e.g. window.J2)      │
+ * │           joins5.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page5            →   page<N>         (e.g. page2)          │
+ * │           page5Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 5 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page5.html — MUST be in this order):
+ *   1. joins5.js    ← sets window.J5
+ *   2. page5.js     ← reads window.J5
+ */
+
+const page5Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page5.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page5' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page5';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page5-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins5.js (window.J5) into a local
+    //  const so the rest of the file just writes  J5.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J5 and window.J5 to J<N> /
+    //                       window.J5<N> on this single line.
+    const J5 = (typeof window !== 'undefined' && window.J5)
+        ? window.J5
+        : (typeof J5 !== 'undefined' ? J5 : null);
+
+    // ====================== GUARD ======================
+    if (!J5) {
+        console.error(
+            '[page5.js] window.J5 is not defined.\n' +
+            'joins5.js must be loaded BEFORE page5.js.\n' +
+            'Fix load order in page5.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J5.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J5 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J5 is always usable (real map or proxy stub).
+    const JOINS = J5 || window.J5;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page5('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page5('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page5('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page5('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J5 map declared in joins5.js
+     * (e.g. 'AC.SP_SEND' resolves J5.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins5.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page5` → `_page<N>` and `J5` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page5(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J5);
+    }
+    window.tap_page5 = function (joinPath, ms) {
+        const join = _resolveJoin_page5(joinPath);
+        if (!join) { console.warn('[tap_page5] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page5 = function (joinPath, value) {
+        const join = _resolveJoin_page5(joinPath);
+        if (!join) { console.warn('[set_page5] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page5 = function (joinPath, value) {
+        const join = _resolveJoin_page5(joinPath);
+        if (!join) { console.warn('[send_page5] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins5 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins5.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        bedroom:  'LIGHTS_BEDROOM',
+        bathroom: 'LIGHTS_BATHROOM',
+        dressing: 'LIGHTS_DRESSING',
+        reading:  'LIGHTS_READING',
+        living:   'LIGHTS_LIVING',
+        kitchen:  'LIGHTS_KITCHEN',
+        hall:     'LIGHTS_HALL',
+        office:   'LIGHTS_OFFICE'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J5.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins5.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins5.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards ─────────────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins5.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins5.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins5.js takes effect.
+                // (val is falsy when the key is missing from joins5.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins5.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins5.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page5 = 0;
+    let _hbTicker_page5 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page5 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page5 = Date.now();
+        subBool(hb, () => { _hbLast_page5 = Date.now(); });
+
+        if (_hbTicker_page5) clearInterval(_hbTicker_page5);
+        _hbTicker_page5 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page5) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 5 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins5.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page5, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page5
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page5(widgetName, target);
+    }
+
+    window.switchWidget_page5 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J5.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page5 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page5' / 'tv-favorites-page5'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page5 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J5.LIGHTS_<AREA>.<PRESET> in joins5.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J5.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page5(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J5.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J5.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J5.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J5.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page5 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J5.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page5 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page5();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page5 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J5.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins5.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page5.html
+    // and must match the J5.SHADES.* constants in joins5.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J5.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J5.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J5.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J5.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J5.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page5 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page5' / 'ac-heater-page5'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J5.AC.* or J5.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page5) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J5.AC.POWER_FB / J5.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J5.AC.ROOM_TEMP_FB or J5.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page5 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J5.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J5.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J5.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J5.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J5.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J5.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J5.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page5 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J5.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J5.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J5.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+
+        // D -> J5.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
+
+        // D -> J5.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
+
+        // D -> J5.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J5.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J5.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page5.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page5, appKey1-page5) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J5.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page5.html and (b) joins5.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        appletv: { label: 'Apple TV',    icon: '🍎', joinKey: 'APPLETV' },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        shahid:  { label: 'Shahid',      icon: '🎬', joinKey: 'SHAHID'  },
+        netflix: { label: 'Netflix',     icon: '📼', joinKey: 'NETFLIX' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+
+        // Volume + channel inside the popup share the existing TV joins
+        // (volume is TV hardware, not per-app). Keep the wiring here so all
+        // app-panel buttons live in one place.
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page5 and toggle via the [hidden] attr. */
+    window.openAppPanel_page5 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins5.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page5 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page5();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page5(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J5.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J5.SYSTEM.PAGE_ACTIVE — tell CH5 shell page5 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page5-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page5, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page5-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page5 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins6.js  —  CRESTRON JOIN MAP for PAGE 6  (Office)
+ * ============================================================================
+ *
+ *   Every join number used by page6 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '2100') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page6.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page6: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page6.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J6 → J<N> AND window.J6 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J6 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '2100',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '2101',  // D -> True while this page is the visible page
+        SHUTDOWN:               '115',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '114',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page6_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page6_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '2840',   // D -> Whole-room "Morning" preset
+        RELAX:    '2841',   // D -> "Relax"
+        DRESSING: '2842',   // D -> "Dressing"
+        SLEEP:    '2843'    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_RECEPTION: {
+        ON:    '3456', DIM:   '3457', RELAX: '3458', OFF:   '3459',
+        CHANNELS: [
+            { label: 'Right spots', ON: '2727', OFF: '2728', DIM_SEND: '', DIM_FB: '' },
+            { label: 'Left spots',     ON: '2729', OFF: '2730', DIM_SEND: '', DIM_FB: '' },
+            { label: 'Covelight',       ON: '2731', OFF: '2732', DIM_SEND: '', DIM_FB: '' },
+            { label: 'Left Chandelier',       ON: '', OFF: '', DIM_SEND: '224', DIM_FB: '224' },
+            { label: 'Right Chandelier',    ON: '', OFF: '', DIM_SEND: '220', DIM_FB: '220' },
+        ]
+    },
+    LIGHTS_ENTRANCE_INDOOR: {
+        ON:    '3107', DIM:   '3108', RELAX: '', OFF:   '3110',
+    },
+    LIGHTS_VOID: {
+        ON:    '3097', DIM:   '', RELAX: '', OFF:   '3098',
+    },
+    LIGHTS_CORRIDOR: {
+        ON:    '3094', DIM:   '', RELAX: '', OFF:   '3095',
+    },
+    LIGHTS_WC: {
+        ON:    '3576', DIM:   '', RELAX: '', OFF:   '3579',
+    },
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page6.js.                                     */
+    SHADES: {
+        // Living Room shutter
+        ALL_OPEN:  '1755',  // D -> raise
+        ALL_CLOSE: '1756',  // D -> lower
+        ALL_STOP:  '1758',  // D -> stop
+        ALL_POS:   '',   // A -> target position 0-100
+        ALL_FB:    '',   // A <- current position 0-100
+
+        // Bedroom shutter
+        CHIMNEY_RIGHT_OPEN:  '1768', CHIMNEY_RIGHT_CLOSE: '1769', CHIMNEY_RIGHT_STOP: '1770',
+        CHIMNEY_RIGHT_POS:   '', CHIMNEY_RIGHT_FB:    '',
+
+        // Bedroom shutter
+        CHIMNEY_LEFT_OPEN:  '1765', CHIMNEY_LEFT_CLOSE: '1766', CHIMNEY_LEFT_STOP: '1767',
+        CHIMNEY_LEFT_POS:   '', CHIMNEY_LEFT_FB:    '',
+
+        // Curtain (horizontal drape)
+        DINING_OPEN:  '1762', DINING_CLOSE: '1763', DINING_STOP: '1764',
+        DINING_POS:   '',  DINING_FB:    '',
+
+        // Balcony shutter
+        RECEPTION_OPEN:  '1759', RECEPTION_CLOSE: '1760', RECEPTION_STOP: '1761',
+        RECEPTION_POS:   '',  RECEPTION_FB:    ''
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+        POWER:         '',  // D -> on / off pulse
+        POWER_FB:      '',  // D <- current power state
+        MODE_AUTO:     '',  MODE_AUTO_FB:     '',
+        MODE_COOL:     '',  MODE_COOL_FB:     '',
+        MODE_HEAT:     '',  MODE_HEAT_FB:     '',
+        MODE_DRY:      '',  MODE_DRY_FB:      '',
+        MODE_FAN_ONLY: '',  MODE_FAN_ONLY_FB: '',
+        FAN_AUTO:      '',  FAN_AUTO_FB:      '',
+        FAN_LOW:       '',  FAN_LOW_FB:       '',
+        FAN_MED:       '',  FAN_MED_FB:       '',
+        FAN_HIGH:      '',  FAN_HIGH_FB:      '',
+
+        SP_SEND:       '',   // A -> setpoint write (16-30 °C)
+        SP_FB:         '',   // A <- setpoint echo from CP4
+        ROOM_TEMP_FB:  ''    // A <- live room temperature
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+        POWER:        '',  POWER_FB:     '',
+        SP_SEND:      '',   SP_FB:        '',  ROOM_TEMP_FB: ''
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+       
+    },
+
+    /* ─── APPS  (satellite / streaming receivers) ────────────────────────
+     * GLOBAL JOINS — these join numbers are identical on every page.
+     * There is one physical OSN box, one BeIN box, one Freesat box in the
+     * house, so their IR/driver joins do NOT change per room.
+     * DO NOT shift these numbers when copying to another page.
+     *
+     * Ranges: OSN 5000-5027 | BEIN 5030-5057 | FREESAT 5060-5087       */
+    APPS: {
+       
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / BeIN / Freesat — fires
+     * BEFORE the receiver-remote view is shown, so SIMPL can switch the
+     * AV matrix to that source. Per-page; leave '' for UI-only.         */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        BEIN:    '',   // D -> tapping BeIN launcher
+        FREESAT: ''    // D -> tapping Freesat launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '690',
+        VOL_UP:    '694',
+        VOL_DOWN:  '695',
+        MUTE:      '696',
+        POWER_OFF: '697'
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J6 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page6.js loaded
+ * after this file with a plain <script src="page6.js"></script>.
+ * We ALSO assign it to window.J6 so:
+ *   - you can probe it in the browser console as window.J6
+ *   - page6.js's `typeof window.J6` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J6 → J<N> AND window.J6 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J6 = J6;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J6;
+}
+/* page6.js — Smart Home Control (4 Widgets) — PAGE 6
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins6.js              ║
+ * ║  and accessed here via the global constant object   J6           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins6.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J6               →   J<N>            (e.g. J2)             │
+ * │           window.J6        →   window.J6<N>     (e.g. window.J2)      │
+ * │           joins6.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page6            →   page<N>         (e.g. page2)          │
+ * │           page6Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 6 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page6.html — MUST be in this order):
+ *   1. joins6.js    ← sets window.J6
+ *   2. page6.js     ← reads window.J6
+ */
+
+const page6Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page6.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page6' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page6';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page6-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins6.js (window.J6) into a local
+    //  const so the rest of the file just writes  J6.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J6 and window.J6 to J<N> /
+    //                       window.J6<N> on this single line.
+    const J6 = (typeof window !== 'undefined' && window.J6)
+        ? window.J6
+        : (typeof J6 !== 'undefined' ? J6 : null);
+
+    // ====================== GUARD ======================
+    if (!J6) {
+        console.error(
+            '[page6.js] window.J6 is not defined.\n' +
+            'joins6.js must be loaded BEFORE page6.js.\n' +
+            'Fix load order in page6.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J6.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J6 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J6 is always usable (real map or proxy stub).
+    const JOINS = J6 || window.J6;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page6('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page6('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page6('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page6('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J6 map declared in joins6.js
+     * (e.g. 'AC.SP_SEND' resolves J6.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins6.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page6` → `_page<N>` and `J6` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page6(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J6);
+    }
+    window.tap_page6 = function (joinPath, ms) {
+        const join = _resolveJoin_page6(joinPath);
+        if (!join) { console.warn('[tap_page6] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page6 = function (joinPath, value) {
+        const join = _resolveJoin_page6(joinPath);
+        if (!join) { console.warn('[set_page6] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page6 = function (joinPath, value) {
+        const join = _resolveJoin_page6(joinPath);
+        if (!join) { console.warn('[send_page6] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins6 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins6.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        reception:  'LIGHTS_RECEPTION',
+        entrance_indoor: 'LIGHTS_ENTRANCE_INDOOR',
+        void: 'LIGHTS_VOID',
+        corridor:  'LIGHTS_CORRIDOR',
+        wc:   'LIGHTS_WC'
+    };
+    const SHADE_JOIN_PREFIX = {
+        all: 'ALL',
+        chimney_right:    'CHIMNEY_RIGHT',
+        chimney_left:    'CHIMNEY_LEFT',
+        reception:    'RECEPTION',
+        dining:    'DINING'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J6.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins6.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins6.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards ─────────────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins6.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins6.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins6.js takes effect.
+                // (val is falsy when the key is missing from joins6.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins6.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins6.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page6 = 0;
+    let _hbTicker_page6 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page6 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page6 = Date.now();
+        subBool(hb, () => { _hbLast_page6 = Date.now(); });
+
+        if (_hbTicker_page6) clearInterval(_hbTicker_page6);
+        _hbTicker_page6 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page6) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 6 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins6.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page6, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page6
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page6(widgetName, target);
+    }
+
+    window.switchWidget_page6 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J6.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page6 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page6' / 'tv-favorites-page6'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page6 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J6.LIGHTS_<AREA>.<PRESET> in joins6.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J6.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page6(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J6.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J6.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J6.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J6.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page6 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J6.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page6 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page6();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<div class="ch-name">' + escAttr(ch.label) + '</div>' +
+                  (ch.ON || ch.OFF ?
+                    '<div class="ch-onoff">' +
+                      '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                              ' data-ch-on="' + (ch.ON || '') + '"' +
+                              ' aria-label="' + ch.label + ' on">ON</button>' +
+                      '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                              ' data-ch-off="' + (ch.OFF || '') + '"' +
+                              ' aria-label="' + ch.label + ' off">OFF</button>' +
+                    '</div>'
+                  : '') +
+                '</div>' +
+                (ch.DIM_SEND ?
+                  '<div class="ch-dim-wrap">' +
+                    '<div class="ch-dim-track">' +
+                      '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                           ' style="width:' + lvl + '%"></div>' +
+                      '<input type="range" class="ch-dim-slider"' +
+                             ' data-ch-send="' + ch.DIM_SEND + '"' +
+                             ' data-ch-idx="' + i + '"' +
+                             ' min="0" max="100" value="' + lvl + '"' +
+                             ' aria-label="' + ch.label + ' dimmer">' +
+                    '</div>' +
+                    '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                  '</div>'
+                : '');
+            wrap.appendChild(row);
+        });
+    }
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+    
+    
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page6 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J6.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins6.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page6.html
+    // and must match the J6.SHADES.* constants in joins6.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J6.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J6.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J6.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J6.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J6.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page6 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page6' / 'ac-heater-page6'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J6.AC.* or J6.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page6) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J6.AC.POWER_FB / J6.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J6.AC.ROOM_TEMP_FB or J6.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page6 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J6.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J6.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J6.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J6.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J6.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J6.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J6.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page6 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J6.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J6.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J6.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+
+        // D -> J6.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
+
+        // D -> J6.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
+
+        // D -> J6.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J6.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J6.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page6.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page6, appKey1-page6) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J6.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page6.html and (b) joins6.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        freesat: { label: 'Freesat',     icon: '📡', joinKey: 'FREESAT' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+
+        // Power, source, vol, ch, mute — each receiver has its own joins.
+        _gid('appPowerBtn')  ?.addEventListener('click', () => pulse(appJoin('POWER')));
+        _gid('appSourceBtn') ?.addEventListener('click', () => pulse(appJoin('SOURCE')));
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(appJoin('VOL_UP')));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(appJoin('VOL_DOWN')));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(appJoin('MUTE')));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(appJoin('CH_UP')));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(appJoin('CH_DOWN')));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page6 and toggle via the [hidden] attr. */
+    window.openAppPanel_page6 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins6.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page6 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page6();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page6(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J6.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J6.SYSTEM.PAGE_ACTIVE — tell CH5 shell page6 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page6-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page6, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page6-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page6 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins7.js  —  CRESTRON JOIN MAP for PAGE 7  (Guest Room)
+ * ============================================================================
+ *
+ *   Every join number used by page7 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '2500') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page7.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page7: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page7.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J7 → J<N> AND window.J7 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J7 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '2500',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '2501',  // D -> True while this page is the visible page
+        SHUTDOWN:               '2502',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '2503',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page7_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page7_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '',   // D -> Whole-room "Morning" preset
+        RELAX:    '',   // D -> "Relax"
+        DRESSING: '',   // D -> "Dressing"
+        SLEEP:    ''    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    LIGHTS_BEDROOM: {
+
+    },
+    
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page7.js.                                     */
+    SHADES: {
+       
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+       
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+        
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+       
+    },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key gets its own dpad + keypad joins so the app-specific
+     * remote can talk to the right driver.                              */
+    APPS: {
+       
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / Apple TV / BeIN —
+     * fires BEFORE the receiver-remote view is shown, so SIMPL can switch
+     * the AV matrix to that source. Per-page; leave '' for UI-only.     */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        APPLETV: '',   // D -> tapping Apple TV launcher
+        BEIN:    ''    // D -> tapping BeIN launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '720',
+        VOL_UP:    '724',
+        VOL_DOWN:  '725',
+        MUTE:      '726',
+        POWER_OFF: '727'
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J7 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page7.js loaded
+ * after this file with a plain <script src="page7.js"></script>.
+ * We ALSO assign it to window.J7 so:
+ *   - you can probe it in the browser console as window.J7
+ *   - page7.js's `typeof window.J7` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J7 → J<N> AND window.J7 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J7 = J7;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J7;
+}
+/* page7.js — Smart Home Control (4 Widgets) — PAGE 7
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins7.js              ║
+ * ║  and accessed here via the global constant object   J7           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins7.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J7               →   J<N>            (e.g. J2)             │
+ * │           window.J7        →   window.J7<N>     (e.g. window.J2)      │
+ * │           joins7.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page7            →   page<N>         (e.g. page2)          │
+ * │           page7Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 7 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page7.html — MUST be in this order):
+ *   1. joins7.js    ← sets window.J7
+ *   2. page7.js     ← reads window.J7
+ */
+
+const page7Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page7.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page7' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page7';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page7-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins7.js (window.J7) into a local
+    //  const so the rest of the file just writes  J7.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J7 and window.J7 to J<N> /
+    //                       window.J7<N> on this single line.
+    const J7 = (typeof window !== 'undefined' && window.J7)
+        ? window.J7
+        : (typeof J7 !== 'undefined' ? J7 : null);
+
+    // ====================== GUARD ======================
+    if (!J7) {
+        console.error(
+            '[page7.js] window.J7 is not defined.\n' +
+            'joins7.js must be loaded BEFORE page7.js.\n' +
+            'Fix load order in page7.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J7.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J7 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J7 is always usable (real map or proxy stub).
+    const JOINS = J7 || window.J7;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page7('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page7('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page7('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page7('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J7 map declared in joins7.js
+     * (e.g. 'AC.SP_SEND' resolves J7.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins7.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page7` → `_page<N>` and `J7` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page7(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J7);
+    }
+    window.tap_page7 = function (joinPath, ms) {
+        const join = _resolveJoin_page7(joinPath);
+        if (!join) { console.warn('[tap_page7] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page7 = function (joinPath, value) {
+        const join = _resolveJoin_page7(joinPath);
+        if (!join) { console.warn('[set_page7] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page7 = function (joinPath, value) {
+        const join = _resolveJoin_page7(joinPath);
+        if (!join) { console.warn('[send_page7] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins7 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins7.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        bedroom:  'LIGHTS_BEDROOM',
+        bathroom: 'LIGHTS_BATHROOM',
+        dressing: 'LIGHTS_DRESSING',
+        reading:  'LIGHTS_READING',
+        living:   'LIGHTS_LIVING',
+        kitchen:  'LIGHTS_KITCHEN',
+        hall:     'LIGHTS_HALL',
+        office:   'LIGHTS_OFFICE'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J7.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins7.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins7.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards ─────────────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins7.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins7.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins7.js takes effect.
+                // (val is falsy when the key is missing from joins7.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins7.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins7.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page7 = 0;
+    let _hbTicker_page7 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page7 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page7 = Date.now();
+        subBool(hb, () => { _hbLast_page7 = Date.now(); });
+
+        if (_hbTicker_page7) clearInterval(_hbTicker_page7);
+        _hbTicker_page7 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page7) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 7 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins7.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page7, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page7
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page7(widgetName, target);
+    }
+
+    window.switchWidget_page7 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J7.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page7 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page7' / 'tv-favorites-page7'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page7 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J7.LIGHTS_<AREA>.<PRESET> in joins7.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J7.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page7(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J7.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J7.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J7.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J7.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page7 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J7.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page7 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page7();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page7 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J7.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins7.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page7.html
+    // and must match the J7.SHADES.* constants in joins7.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J7.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J7.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J7.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J7.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J7.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page7 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page7' / 'ac-heater-page7'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J7.AC.* or J7.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page7) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J7.AC.POWER_FB / J7.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J7.AC.ROOM_TEMP_FB or J7.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page7 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J7.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J7.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J7.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J7.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J7.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J7.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J7.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page7 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J7.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J7.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J7.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+
+        // D -> J7.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
+
+        // D -> J7.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
+
+        // D -> J7.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J7.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J7.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page7.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page7, appKey1-page7) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J7.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page7.html and (b) joins7.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        appletv: { label: 'Apple TV',    icon: '🍎', joinKey: 'APPLETV' },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        shahid:  { label: 'Shahid',      icon: '🎬', joinKey: 'SHAHID'  },
+        netflix: { label: 'Netflix',     icon: '📼', joinKey: 'NETFLIX' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+
+        // Volume + channel share the TV joins; dpad/keypad use app-specific joins.
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page7 and toggle via the [hidden] attr. */
+    window.openAppPanel_page7 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins7.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page7 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page7();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page7(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J7.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J7.SYSTEM.PAGE_ACTIVE — tell CH5 shell page7 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page7-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page7, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page7-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page7 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins8.js  —  CRESTRON JOIN MAP for PAGE 8  (Bathroom)
+ * ============================================================================
+ *
+ *   Every join number used by page8 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '2900') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page8.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page8: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page8.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J8 → J<N> AND window.J8 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J8 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '2900',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '2901',  // D -> True while this page is the visible page
+        SHUTDOWN:               '263',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '263',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page8_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page8_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '2783',   // D -> Whole-room "Morning" preset
+        RELAX:    '2784',   // D -> "Relax"
+        DRESSING: '2785',   // D -> "Dressing"
+        SLEEP:    '2786'    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                          */
+
+    LIGHTS_BASEMENT: {
+        ON:    '3420', DIM:   '3421', RELAX: '3424', OFF:   '3423',
+    },
+    LIGHTS_CORRIDOR: {
+        ON:    '3286', DIM:   '', RELAX: '', OFF:   '3289',
+    },
+    LIGHTS_ENTRANCE_INDOOR: {
+        ON:    '3279', DIM:   '3281', RELAX: '', OFF:   '3282',
+    },
+    LIGHTS_ENTRANCE_OUTDOOR: {
+        ON:    '3272', DIM:   '', RELAX: '', OFF:   '3275',
+    },
+
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page8.js.                                     */
+    SHADES: {
+    },
+
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+        POWER:    '989', // SOURCE:   '3101',
+        VOL_UP:   '986',  VOL_DOWN: '987',  MUTE:     '988',
+        CH_UP:    '1205',  CH_DOWN:  '1206',
+        DPAD_UP:  '760',  DPAD_DOWN:'761',  DPAD_LEFT:'762',
+        DPAD_RIGHT:'763', DPAD_OK:  '764',
+        KEY_BACK: '1214',  KEY_HOME: '1216',  KEY_MENU: '1215',
+        KEY_ENTER:'764',  KEY_CHLIST:'1217',
+        KEYPAD_BASE: 766, // numeric — KEYPAD_BASE+0..9 → joins '3130'-'3139'
+       // FAV_BASE:    3140  // numeric — FAV_BASE+0..9   → joins '3140'-'3149'
+    },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key (e.g. NETFLIX) gets its own dpad + keypad joins so
+     * the app-specific remote in the popup can talk to the right driver. */
+    APPS: {
+        // -- OSN -------------------------------------------------------------------
+        OSN: {
+            POWER:    '989',  //SOURCE:   '5001',
+            VOL_UP:   '986',  VOL_DOWN: '987',  MUTE:     '988',
+            CH_UP:    '1308',  CH_DOWN:  '1307',
+            DPAD_UP:  '544',   DPAD_DOWN:'545',   DPAD_LEFT:'546',
+            DPAD_RIGHT:'547',  DPAD_OK:  '548',
+            KEY_0: '558', KEY_1: '549', KEY_2: '550', KEY_3: '551',
+            KEY_4: '552', KEY_5: '553', KEY_6: '554', KEY_7: '555',
+            KEY_8: '556', KEY_9: '557',
+            KEY_HOME: '1306', KEY_MENU: '1311', KEY_BACK: '1309',
+            KEY_CHLIST: '', LAUNCH: ''
+        },
+        // -- BeIN Sports -----------------------------------------------------------
+        BEIN: {
+            POWER:    '989',  //SOURCE:   '5031',
+            VOL_UP:   '986',  VOL_DOWN: '987',  MUTE:     '988',
+            CH_UP:    '1248',  CH_DOWN:  '1249',
+            DPAD_UP:  '577',   DPAD_DOWN:'578',   DPAD_LEFT:'579',
+            DPAD_RIGHT:'580',  DPAD_OK:  '581',
+            KEY_0: '591', KEY_1: '582', KEY_2: '583', KEY_3: '584',
+            KEY_4: '585', KEY_5: '586', KEY_6: '587', KEY_7: '588',
+            KEY_8: '589', KEY_9: '590',
+            KEY_HOME: '1247', KEY_MENU: '1251', KEY_BACK: '1250',
+            KEY_CHLIST: ''
+        },
+        // -- Freesat ---------------------------------------------------------------
+        FREESAT: {
+            POWER:    '989',     //SOURCE:   '',
+            VOL_UP:   '986',   VOL_DOWN: '987',   MUTE:     '988',
+            CH_UP:    '560',   CH_DOWN:  '561',
+            DPAD_UP:  '560',   DPAD_DOWN:'561',   DPAD_LEFT:'562',
+            DPAD_RIGHT:'563',  DPAD_OK:  '564',
+            KEY_0: '574', KEY_1: '565', KEY_2: '566', KEY_3: '567',
+            KEY_4: '568', KEY_5: '569', KEY_6: '570', KEY_7: '571',
+            KEY_8: '572', KEY_9: '573',
+            KEY_HOME: '1486', KEY_MENU: '1487', KEY_BACK: '1478'
+        }
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / BeIN / Freesat — fires
+     * BEFORE the receiver-remote view is shown, so SIMPL can switch the
+     * AV matrix to that source. Per-page; leave '' for UI-only.         */
+    LAUNCHERS: {
+        OSN:     '996',   // D -> tapping OSN launcher
+        BEIN:    '998',   // D -> tapping BeIN launcher
+        FREESAT: '995'    // D -> tapping Freesat launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        AIRPLAY:   '1718',
+        VOL_UP:    '1719',
+        VOL_DOWN:  '1721',
+        MUTE:      '1720',
+        POWER_OFF: '1722'
+    }
+
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J8 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page8.js loaded
+ * after this file with a plain <script src="page8.js"></script>.
+ * We ALSO assign it to window.J8 so:
+ *   - you can probe it in the browser console as window.J8
+ *   - page8.js's `typeof window.J8` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J8 → J<N> AND window.J8 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J8 = J8;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J8;
+}
+/* page8.js — Smart Home Control (4 Widgets) — PAGE 8
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins8.js              ║
+ * ║  and accessed here via the global constant object   J8           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins8.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J8               →   J<N>            (e.g. J2)             │
+ * │           window.J8        →   window.J8<N>     (e.g. window.J2)      │
+ * │           joins8.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page8            →   page<N>         (e.g. page2)          │
+ * │           page8Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 8 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page8.html — MUST be in this order):
+ *   1. joins8.js    ← sets window.J8
+ *   2. page8.js     ← reads window.J8
+ */
+
+const page8Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page8.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page8' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page8';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page8-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins8.js (window.J8) into a local
+    //  const so the rest of the file just writes  J8.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J8 and window.J8 to J<N> /
+    //                       window.J8<N> on this single line.
+    const J8 = (typeof window !== 'undefined' && window.J8)
+        ? window.J8
+        : (typeof J8 !== 'undefined' ? J8 : null);
+
+    // ====================== GUARD ======================
+    if (!J8) {
+        console.error(
+            '[page8.js] window.J8 is not defined.\n' +
+            'joins8.js must be loaded BEFORE page8.js.\n' +
+            'Fix load order in page8.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J8.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J8 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J8 is always usable (real map or proxy stub).
+    const JOINS = J8 || window.J8;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page8('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page8('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page8('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page8('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J8 map declared in joins8.js
+     * (e.g. 'AC.SP_SEND' resolves J8.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins8.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page8` → `_page<N>` and `J8` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page8(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J8);
+    }
+    window.tap_page8 = function (joinPath, ms) {
+        const join = _resolveJoin_page8(joinPath);
+        if (!join) { console.warn('[tap_page8] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page8 = function (joinPath, value) {
+        const join = _resolveJoin_page8(joinPath);
+        if (!join) { console.warn('[set_page8] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page8 = function (joinPath, value) {
+        const join = _resolveJoin_page8(joinPath);
+        if (!join) { console.warn('[send_page8] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins8 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins8.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        basement:  'LIGHTS_BASEMENT',
+        corridor: 'LIGHTS_CORRIDOR',
+        entrance_indoor: 'LIGHTS_ENTRANCE_INDOOR',
+        entrance_outdoor:  'LIGHTS_ENTRANCE_OUTDOOR',
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J8.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins8.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins8.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards ─────────────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins8.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins8.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins8.js takes effect.
+                // (val is falsy when the key is missing from joins8.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins8.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins8.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page8 = 0;
+    let _hbTicker_page8 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page8 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page8 = Date.now();
+        subBool(hb, () => { _hbLast_page8 = Date.now(); });
+
+        if (_hbTicker_page8) clearInterval(_hbTicker_page8);
+        _hbTicker_page8 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page8) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 8 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins8.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page8, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page8
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page8(widgetName, target);
+    }
+
+    window.switchWidget_page8 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J8.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page8 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page8' / 'tv-favorites-page8'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page8 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J8.LIGHTS_<AREA>.<PRESET> in joins8.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J8.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page8(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J8.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J8.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J8.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J8.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page8 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J8.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page8 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page8();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page8 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J8.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins8.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page8.html
+    // and must match the J8.SHADES.* constants in joins8.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J8.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J8.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J8.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J8.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J8.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page8 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page8' / 'ac-heater-page8'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J8.AC.* or J8.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page8) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J8.AC.POWER_FB / J8.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J8.AC.ROOM_TEMP_FB or J8.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page8 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J8.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J8.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J8.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J8.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J8.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J8.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J8.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page8 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J8.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J8.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J8.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+        // The TV-remote (tv-controls) UI was removed; the main TV view now
+        // only shows the receiver launchers (inline onclick -> openAppPanel_page8).
+        // Wire the app-remote view buttons (joins resolved per active receiver).
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page8, appKey1-page8) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J8.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page8.html and (b) joins8.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        freesat: { label: 'Freesat',     icon: '📡', joinKey: 'FREESAT' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+        _gid('appExitBtn')  ?.addEventListener('click', () => pulse(appJoin('EXIT')));
+
+        // Power, source, vol, ch, mute — each receiver has its own joins.
+        _gid('appPowerBtn')  ?.addEventListener('click', () => pulse(appJoin('POWER')));
+        _gid('appSourceBtn') ?.addEventListener('click', () => pulse(appJoin('SOURCE')));
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(appJoin('VOL_UP')));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(appJoin('VOL_DOWN')));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(appJoin('MUTE')));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(appJoin('CH_UP')));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(appJoin('CH_DOWN')));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page8 and toggle via the [hidden] attr. */
+    window.openAppPanel_page8 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins8.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page8 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page8();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        const M = JOINS && JOINS.MUSIC;
+        if (!M) return;
+
+        const wire = (id, joinName, label) => {
+            const btn  = _gid(id);
+            const join = M[joinName];
+            if (!btn || !join) return;
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[Music] ${label} → Digital Join ${join}`);
+            });
+        };
+
+        wire('musicAirPlayBtn', 'AIRPLAY',   'Air Play');
+        wire('musicVolUpBtn',   'VOL_UP',    'Vol +');
+        wire('musicVolDownBtn', 'VOL_DOWN',  'Vol −');
+        wire('musicMuteBtn',    'MUTE',      'Mute');
+        wire('musicPowerBtn',   'POWER_OFF', 'Power Off');
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page8(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J8.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J8.SYSTEM.PAGE_ACTIVE — tell CH5 shell page8 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page8-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page8, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page8-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page8 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
+                }
+            }
+        );
+    } else {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onInit);
+        } else {
+            onInit();
+        }
+    }
+
+    return {};
+})();
+/* ============================================================================
+ * joins9.js  —  CRESTRON JOIN MAP for PAGE 9  (Garden)
+ * ============================================================================
+ *
+ *   Every join number used by page9 is declared here. To wire your SIMPL
+ *   program: replace the numeric strings (e.g. '3300') with the join number
+ *   from your SIMPL Windows program. Keep the KEY NAMES exactly as written
+ *   — page9.js looks them up by name.
+ *
+ *   Recommended page-N ranges:
+ *     page9: 100–499   page2: 500–899   page3: 900–1299   …
+ *   Shift each pageN by +400 from the previous to leave room.
+ *
+ *   ANALOG vs DIGITAL: there's no syntactic distinction in the map — both
+ *   are just join-number strings. The TYPE is determined by HOW page9.js
+ *   calls them (pulse/subBool = digital; sendAnalog/subAnalog = analog;
+ *   sendSerial/subSerial = serial). Comments below mark which is which:
+ *     D  = Digital  (boolean — pulse / on / off)
+ *     A  = Analog   (number  — level 0-100, temperature, volume, …)
+ *     S  = Serial   (string  — text)
+ *
+ *   DIRECTION:
+ *     ->  panel publishes to CP4   (pulse / sendAnalog / sendSerial)
+ *     <-  panel subscribes from CP4 (subBool / subAnalog / subSerial)
+ *
+ *   ▸▸▸ EDIT-FOR-PAGE-N: rename J9 → J<N> AND window.J9 → window.J<N>.
+ *                         Also shift every join number to the new page's
+ *                         range (e.g. page2 = (joinN + 400)).
+ * ============================================================================ */
+
+const J9 = {
+
+    /* ─── SYSTEM ─────────────────────────────────────────────────────────
+     * Page-level housekeeping signals.                                  */
+    SYSTEM: {
+        REQUEST_STATUS: '3300',  // D -> Pulse on init to ask CP4 to re-broadcast all FB
+        PAGE_ACTIVE:    '3301',  // D -> True while this page is the visible page
+        SHUTDOWN:               '143',  // D -> Pulse when user confirms shutdown (without shutter)
+        SHUTDOWN_WITH_SHUTTER:  '143',  // D -> Pulse when user confirms shutdown (with shutter)
+        ACTIVE_WIDGET:  'page9_active_widget',  // S -> Currently visible tab name
+        ACTIVE_AREA:    'page9_active_area'     // S -> Currently open area-popup label
+    },
+
+    /* ─── LIGHTS_GLOBAL ──────────────────────────────────────────────────
+     * Whole-room lighting scenes, surfaced as the green pill bar at the
+     * top of the Lights widget. Each pulse triggers ONE digital join.   */
+    LIGHTS_GLOBAL: {
+        MORNING:  '2870',   // D -> Whole-room "Morning" preset
+        RELAX:    '2875',   // D -> "Relax"
+        DRESSING: '2786',   // D -> "Dressing"
+        SLEEP:    ''    // D -> "Sleep"
+    },
+
+    /* ─── LIGHTS_<AREA> ──────────────────────────────────────────────────
+     * One section per lighting area. The Lights widget renders ONE row
+     * per area, each with 4 inline buttons that pulse the joins below:
+     *      All On  → ON      Dim   → DIM
+     *      Relax   → RELAX   All Off → OFF
+     *
+     * DIMMER_SEND / DIMMER_FB are kept for future use (wire them up if
+     * you re-add a per-area dimmer slider). They are NOT used by the
+     * current 4-button row.                                             */
+
+    /* ── LANDSCAPE sub-widget ─────────────────────────────────────── */
+    LIGHTS_LANDSCAPE: {
+        ON: '3265', DIM: '3266', RELAX: '3267', OFF: '3268'
+    },
+    LIGHTS_TERRACE: {
+        ON: '3259', DIM: '', RELAX: '', OFF: '3262'
+    },
+    LIGHTS_PERGOLA: {
+        ON: '3253', DIM: '3254', RELAX: '', OFF: '3256'
+    },
+    LIGHTS_FANS: {
+        ON: '3250', DIM: '', RELAX: '', OFF: '3251'
+    },
+    LIGHTS_POOL: {
+        ON: '3486', DIM: '', RELAX: '', OFF: '3489'
+    },
+
+    /* ── VILLA sub-widget ─────────────────────────────────────────── */
+
+    LIGHTS_GROUND_OUTDOOR_ENTRANCE: {
+        ON: '3491', DIM: '3492', RELAX: '3493', OFF: '3494'
+    },
+    LIGHTS_GARAGE: {
+        ON: '3541', DIM: '3542', RELAX: '3543', OFF: '3544'
+    },
+    LIGHTS_BASEMENT_OUTDOOR_ENTRANCE: {
+        ON: '3272', DIM: '', RELAX: '', OFF: '3275'
+    },
+    LIGHTS_MAIN_ENTRANCE_STAIRS: {
+        ON: '3615', DIM: '', RELAX: '', OFF: '3616'
+    },
+    LIGHTS_LEFT_STAIRS: {
+        ON: '3399', DIM: '', RELAX: '', OFF: '3400'
+    },
+    LIGHTS_RIGHT_STAIRS: {
+        ON: '3618', DIM: '', RELAX: '', OFF: '3619'
+    },
+
+    /* ── STREET sub-widget ────────────────────────────────────────── */
+
+    LIGHTS_STREET_ENTRANCE: {
+        ON: '3100', DIM: '', RELAX: '', OFF: '3101'
+    },
+    LIGHTS_STREET_GARAGE_GATE: {
+        ON: '3567', DIM: '', RELAX: '', OFF: '3568'
+    },
+
+    /* ─── SHADES ─────────────────────────────────────────────────────────
+     * Each shade group needs OPEN / CLOSE / STOP digital joins, optional
+     * POS analog (panel writes target position) and FB analog (panel
+     * reads current position 0-100). Section keys must match
+     * SHADE_JOIN_PREFIX in page9.js.                                     */
+    SHADES: {
+    },
+
+    /* ─── AC (Air Conditioner) ───────────────────────────────────────────
+     * Mode / fan buttons are mutually-exclusive; the FB joins drive the
+     * "active" highlight on the matching button.                        */
+    AC: {
+    },
+
+    /* ─── HEATER ─────────────────────────────────────────────────────────
+     * Same shape as AC but for an underfloor / radiator heater.         */
+    HEATER: {
+    },
+
+    /* ─── TV ─────────────────────────────────────────────────────────────
+     * Transport + dpad + keypad + favorites. KEYPAD_BASE and FAV_BASE
+     * are NUMBERS (not strings) because the JS adds an index offset:
+     *     FAV_BASE + i   →  one join per favorite slot
+     *     KEYPAD_BASE + i → one join per number 0-9                     */
+    TV: {
+    },
+
+    /* ─── APPS  (streaming app launchers + in-app remote) ────────────────
+     * Each app key (e.g. NETFLIX) gets its own dpad + keypad joins so
+     * the app-specific remote in the popup can talk to the right driver. */
+    APPS: {
+    },
+
+    /* ─── APP LAUNCHERS  (quick-grid buttons in the TV widget) ───────────
+     * One digital join per launcher button in the .quick-grid above the
+     * TV controls. Pulsed when the user taps OSN / Apple TV / BeIN —
+     * fires BEFORE the receiver-remote view is shown, so SIMPL can switch
+     * the AV matrix to that source. Per-page; leave '' for UI-only.     */
+    LAUNCHERS: {
+        OSN:     '',   // D -> tapping OSN launcher
+        APPLETV: '',   // D -> tapping Apple TV launcher
+        BEIN:    ''    // D -> tapping BeIN launcher
+    },
+
+    /* ─── MUSIC WIDGET ───────────────────────────────────────────────────
+     * Five-button audio control. Each pulses one digital join.          */
+    MUSIC: {
+        LANDSCAPE: {
+            AIRPLAY:   '470',
+            VOL_UP:    '474',
+            VOL_DOWN:  '475',
+            MUTE:      '476',
+            POWER_OFF: '477'
+        },
+        TERRACE: {
+            AIRPLAY:   '515',
+            VOL_UP:    '519',
+            VOL_DOWN:  '520',
+            MUTE:      '521',
+            POWER_OFF: '522'
+        }
+    }
+};
+
+
+/* ---- Expose the map globally ---------------------------------------------
+ * `const J9 = {...}` declared at top-level of a classic <script> creates a
+ * binding in the shared script-scope — it IS visible to page9.js loaded
+ * after this file with a plain <script src="page9.js"></script>.
+ * We ALSO assign it to window.J9 so:
+ *   - you can probe it in the browser console as window.J9
+ *   - page9.js's `typeof window.J9` safety check finds it even in odd scopes
+ *
+ * ▸▸▸ EDIT-FOR-PAGE-N: rename J9 → J<N> AND window.J9 → window.J<N>.
+ * ------------------------------------------------------------------------- */
+if (typeof window !== 'undefined') window.J9 = J9;
+
+/* ---- Module export (future-proofing for ES-module / webpack / vite) ----- */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = J9;
+}
+/* page9.js — Smart Home Control (4 Widgets) — PAGE 9
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  JOIN NUMBERS ARE NOT IN THIS FILE                              ║
+ * ║  All Crestron join numbers are defined in joins9.js              ║
+ * ║  and accessed here via the global constant object   J9           ║
+ * ║                                                                  ║
+ * ║  To reassign a join:  edit joins9.js only.                       ║
+ * ║  Never write a raw number like pulse('60') in this file.         ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * ┌──────────────────────────────────────────────────────────────────────┐
+ * │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+ * │  ------------------------------------------------------------------  │
+ * │  1.  Save as `page<N>.js`  (e.g. page2.js).                          │
+ * │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+ * │           J9               →   J<N>            (e.g. J2)             │
+ * │           window.J9        →   window.J9<N>     (e.g. window.J2)      │
+ * │           joins9.js        →   joins<N>.js     (e.g. joins2.js)      │
+ * │           page9            →   page<N>         (e.g. page2)          │
+ * │           page9Module      →   page<N>Module   (e.g. page2Module)    │
+ * │           Page 9 Initialized → Page <N> Initialized                  │
+ * │  3.  Adjust AREA_JOIN_SECTION / SHADE_JOIN_PREFIX maps if your       │
+ * │      new page has different rooms / shades.                          │
+ * │  4.  Adjust the data-area / data-shade strings in the HTML to        │
+ * │      match the new map.                                              │
+ * └──────────────────────────────────────────────────────────────────────┘
+ *
+ * LOAD ORDER (page9.html — MUST be in this order):
+ *   1. joins9.js    ← sets window.J9
+ *   2. page9.js     ← reads window.J9
+ */
+
+const page9Module = (() => {
+    'use strict';
+
+    /* ──────────────────────────────────────────────────────────────
+     * MULTI-PAGE NAMESPACE — every id in page9.html is suffixed
+     * with PAGE_SUFFIX so duplicate ids across pages do not collide.
+     *   Use  _gid('foo')   instead of  document.getElementById('foo')
+     *   Use  _qsa('.foo')  instead of  document.querySelectorAll('.foo')
+     *   Use  _qs('.foo')   instead of  document.querySelector('.foo')
+     * (querySelectorAll/querySelector variants are scoped to PAGE_ROOT.)
+     * PAGE_ROOT is the ONLY id that is NOT suffixed (it's already unique
+     * per page), so we look it up with the raw browser API.
+     * ▸▸▸ EDIT-FOR-PAGE-N: change '-page9' to '-page<N>' on copy.
+     * ────────────────────────────────────────────────────────────── */
+    const PAGE_SUFFIX = '-page9';
+    // Resolved LAZILY — on the CH5 panel this script can run before
+    // the page section has been injected into the DOM. If we captured
+    // the root once at IIFE init time it would be null, _qsa/_qs would
+    // fall back to `document`, and this page's onInit would attach its
+    // openAreaPanel handler (and other listeners) to other pages' cards
+    // too — causing every page's popup to fire on a single long-press.
+    const PAGE_ROOT = () => document.getElementById('page9-page') || document;
+    const _gid = (id)  => document.getElementById(id + PAGE_SUFFIX);
+    const _qsa = (sel) => PAGE_ROOT().querySelectorAll(sel);
+    const _qs  = (sel) => PAGE_ROOT().querySelector(sel);
+
+    // ====================== JOIN MAP ALIAS ======================
+    //  Pull the map exported by joins9.js (window.J9) into a local
+    //  const so the rest of the file just writes  J9.SECTION.KEY
+    //  ▸▸▸ EDIT-FOR-PAGE-N: rename both J9 and window.J9 to J<N> /
+    //                       window.J9<N> on this single line.
+    const J9 = (typeof window !== 'undefined' && window.J9)
+        ? window.J9
+        : (typeof J9 !== 'undefined' ? J9 : null);
+
+    // ====================== GUARD ======================
+    if (!J9) {
+        console.error(
+            '[page9.js] window.J9 is not defined.\n' +
+            'joins9.js must be loaded BEFORE page9.js.\n' +
+            'Fix load order in page9.html / project-config.json.'
+        );
+        // Build a safe stub so page still boots — every J9.X.Y returns ''
+        // and pulse()/sendAnalog() will no-op for empty joins.
+        if (typeof window !== 'undefined') {
+            window.J9 = new Proxy({}, { get: () => new Proxy({}, { get: () => '' }) });
+        }
+    }
+    // After the guard, J9 is always usable (real map or proxy stub).
+    const JOINS = J9 || window.J9;
+
+    // ====================== CrComLib SAFE HELPERS ======================
+    const hasCrestron = () => typeof CrComLib !== 'undefined';
+
+    // Repeat-safe momentary pulse. Each press forces the join LOW before the
+    // new HIGH (and tracks a per-join timer), so pressing the SAME button again
+    // — e.g. typing channel 1112 — always yields a fresh rising edge instead of
+    // merging into one long HIGH that the IR driver sees as a single press.
+    const _pulseTimers = Object.create(null);
+    function pulse(join, ms = 100) {
+        if (!hasCrestron() || !join) return;
+        if (_pulseTimers[join]) clearTimeout(_pulseTimers[join]);
+        CrComLib.publishEvent('b', join, false);  // clean LOW first
+        CrComLib.publishEvent('b', join, true);   // rising edge -> fires
+        _pulseTimers[join] = setTimeout(() => {
+            CrComLib.publishEvent('b', join, false);
+            delete _pulseTimers[join];
+        }, ms);
+    }
+
+    function sendAnalog(join, value) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('n', join, value);
+    }
+
+    function sendSerial(join, text) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.publishEvent('s', join, text);
+    }
+
+    function subBool(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('b', join, cb);
+    }
+
+    function subAnalog(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('n', join, cb);
+    }
+
+    function subSerial(join, cb) {
+        if (!hasCrestron() || !join) return;
+        CrComLib.subscribeState('s', join, cb);
+    }
+
+    /* ====================== GENERIC INLINE-ONCLICK BRIDGE ======================
+     *
+     * Lets ANY button anywhere on the page wire to a Crestron join with one
+     * line of HTML — no per-button wrapper, no edit to this .js file.
+     *
+     *   <button onclick="tap_page9('TV.POWER')">          → digital pulse
+     *   <button onclick="set_page9('AC.POWER', true)">    → digital set
+     *   <button onclick="send_page9('AC.SP_SEND', 22)">   → analog (number)
+     *   <button onclick="send_page9('NOTES.MSG', 'Hi')">  → serial (string)
+     *
+     * The first arg is a dot-path into the J9 map declared in joins9.js
+     * (e.g. 'AC.SP_SEND' resolves J9.AC.SP_SEND). If the path does not
+     * resolve, a console warning is emitted and the call is a safe no-op.
+     *
+     * To rename a join: edit joins9.js. The HTML string just has to match
+     * the new path — no other code change.
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: rename `_page9` → `_page<N>` and `J9` → `J<N>`
+     *                       on every occurrence in this block. */
+    function _resolveJoin_page9(joinPath) {
+        if (typeof joinPath !== 'string' || !joinPath) return null;
+        return joinPath.split('.').reduce((o, k) => (o ? o[k] : null), J9);
+    }
+    window.tap_page9 = function (joinPath, ms) {
+        const join = _resolveJoin_page9(joinPath);
+        if (!join) { console.warn('[tap_page9] no join for', joinPath); return; }
+        pulse(join, typeof ms === 'number' ? ms : 100);
+    };
+    window.set_page9 = function (joinPath, value) {
+        const join = _resolveJoin_page9(joinPath);
+        if (!join) { console.warn('[set_page9] no join for', joinPath); return; }
+        if (!hasCrestron()) return;
+        CrComLib.publishEvent('b', join, !!value);
+    };
+    window.send_page9 = function (joinPath, value) {
+        const join = _resolveJoin_page9(joinPath);
+        if (!join) { console.warn('[send_page9] no join for', joinPath); return; }
+        if (typeof value === 'number')      sendAnalog(join, value);
+        else if (typeof value === 'boolean') CrComLib && CrComLib.publishEvent('b', join, value);
+        else                                sendSerial(join, String(value));
+    };
+
+    // ====================== PRESET CATALOG ======================
+    const DEFAULT_CATALOG = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+    };
+
+    function catalog() {
+        return (typeof window !== 'undefined' && window.LIGHT_PRESETS) || DEFAULT_CATALOG;
+    }
+
+    function presetInfo(key) {
+        const cat = catalog();
+        return cat[key] || { label: key, icon: '•', color: 'generic' };
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ====================== LONG-PRESS HELPER ======================
+    const LONG_PRESS_MS        = 600;   // ms hold before popup opens
+    const LONG_PRESS_CANCEL_PX = 10;    // px movement that cancels the hold
+
+    function attachLongPress(el, callback, ms) {
+        let timer = null, startX = 0, startY = 0, didFire = false, pressActive = false;
+
+        function clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            el.classList.remove('lp-holding');
+            pressActive = false;
+        }
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.acard-switch')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            didFire = false; pressActive = true;
+            startX = e.clientX; startY = e.clientY;
+            el.classList.add('lp-holding');
+            timer = setTimeout(() => {
+                timer = null;
+                if (!pressActive) return;
+                didFire = true;
+                el.classList.remove('lp-holding');
+                try { callback(el); } catch (err) { console.error(err); }
+            }, ms);
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!pressActive) return;
+            if (Math.abs(e.clientX - startX) > LONG_PRESS_CANCEL_PX ||
+                Math.abs(e.clientY - startY) > LONG_PRESS_CANCEL_PX) clear();
+        });
+
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, clear));
+
+        el.addEventListener('contextmenu', (e) => {
+            if (didFire || pressActive) e.preventDefault();
+        });
+    }
+
+    // ====================== STATE ======================
+    const areaState = {};
+    let currentPanelArea = null;
+    let panelPortalDone  = false;
+
+    // ────── HTML → joins9 MAP resolvers ──────────────────────────────────
+    // Maps on-screen keys (data-area="bedroom", data-shade="livingroom", …)
+    // to the section names used in joins9.js.
+    // ▸▸▸ EDIT-FOR-PAGE-N: if your new page has different rooms/shades,
+    //                      add or remove entries here AND update the
+    //                      matching data-area / data-shade strings in
+    //                      pageN.html, then add matching sections in
+    //                      joinsN.js.
+    const AREA_JOIN_SECTION = {
+        landscape: 'LIGHTS_LANDSCAPE',
+        terrace:  'LIGHTS_TERRACE',
+        pergola:  'LIGHTS_PERGOLA',
+        fans:   'LIGHTS_FANS',
+        pool:   'LIGHTS_POOL',
+        ground_outdoor_entrance: 'LIGHTS_GROUND_OUTDOOR_ENTRANCE',
+        garage:     'LIGHTS_GARAGE',
+        basement_outdoor_entrance:'LIGHTS_BASEMENT_OUTDOOR_ENTRANCE',
+        left_stairs:    'LIGHTS_LEFT_STAIRS',
+        right_stairs:    'LIGHTS_RIGHT_STAIRS',
+        street_entrance:     'LIGHTS_STREET_ENTRANCE',
+        street_garage_gate:  'LIGHTS_STREET_GARAGE_GATE',
+        main_entrance_stairs: 'LIGHTS_MAIN_ENTRANCE_STAIRS'
+    };
+    const SHADE_JOIN_PREFIX = {
+        livingroom: 'LIVING_ROOM',
+        bedroom:    'BEDROOM',
+        curtain:    'CURTAIN',
+        balcony:    'BALCONY'
+    };
+    const MUSIC_JOIN_PREFIX = {
+        landscape: 'LANDSCAPE',
+        terrace:    'TERRACE'
+    };
+    // AC mode/fan "data-mode"/"data-fan" → key name inside J9.AC
+    const AC_MODE_KEY = { auto:'MODE_AUTO', cool:'MODE_COOL', heat:'MODE_HEAT',
+                          dry:'MODE_DRY',   fan:'MODE_FAN_ONLY' };
+    const AC_FAN_KEY  = { auto:'FAN_AUTO',  low:'FAN_LOW',    med:'FAN_MED',
+                          high:'FAN_HIGH' };
+
+    /* Mirror the joins9.js map onto HTML data-* attributes so colleagues only
+     * have to edit joins9.js — never the HTML. Runs once, at the top of
+     * onInit(), BEFORE buildAreaState()/setupShades()/setupAC() read the
+     * attributes. Safe to call more than once (idempotent). */
+    function applyJoinsToHtml() {
+        if (!JOINS) return;
+
+        // ── Light area cards ─────────────────────────────────────────────
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            // Normalize to lowercase so the map works whether HTML uses
+            // data-area="Bedroom", "bedroom", or "BEDROOM".
+            const areaKey = (card.dataset.area || '').toLowerCase();
+            const section = AREA_JOIN_SECTION[areaKey];
+            const J_      = section && JOINS[section];
+            if (!J_) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            presetKeys.forEach(pk => {
+                // Match preset key like 'on' / 'relax' / 'tv' / 'p10'
+                // against joins9.js keys like 'ON' / 'RELAX' / 'TV_SCENE' / 'P10'
+                const candidates = [
+                    pk.toUpperCase(),                 // on → ON
+                    pk.toUpperCase() + '_SCENE',      // tv → TV_SCENE
+                    pk.toUpperCase() + '_ALL'         // dim → DIM_ALL (for LIGHTS_GLOBAL)
+                ];
+                const val = candidates.map(k => J_[k]).find(v => v);
+                // joins9.js is the source of truth — ALWAYS overwrite any
+                // hardcoded value in HTML so editing joins9.js takes effect.
+                // (val is falsy when the key is missing from joins9.js, in
+                //  which case we leave the HTML default alone.)
+                if (val) {
+                    card.setAttribute('data-join-' + pk, val);
+                }
+            });
+
+            // Same rule for analog joins: joins9.js overwrites HTML defaults.
+            // The "Main" channel still uses data-analog/data-fb for backward
+            // compatibility; Accent + Wall channels get their own attrs.
+            if (J_.DIMMER_SEND)         card.setAttribute('data-analog',         J_.DIMMER_SEND);
+            if (J_.DIMMER_FB)           card.setAttribute('data-fb',             J_.DIMMER_FB);
+            if (J_.DIMMER_ACCENT_SEND)  card.setAttribute('data-dim-accent',     J_.DIMMER_ACCENT_SEND);
+            if (J_.DIMMER_ACCENT_FB)    card.setAttribute('data-dim-accent-fb',  J_.DIMMER_ACCENT_FB);
+            if (J_.DIMMER_WALL_SEND)    card.setAttribute('data-dim-wall',       J_.DIMMER_WALL_SEND);
+            if (J_.DIMMER_WALL_FB)      card.setAttribute('data-dim-wall-fb',    J_.DIMMER_WALL_FB);
+        });
+
+        // ── Shade cards ─────────────────────────────────────────────────
+        _qsa('.shade-card').forEach(card => {
+            // Normalize to lowercase so the lookup is case-insensitive.
+            const shadeKey = (card.dataset.shade || '').toLowerCase();
+            const prefix   = SHADE_JOIN_PREFIX[shadeKey];
+            if (!prefix || !JOINS.SHADES) return;
+            const set = (attr, key) => {
+                // joins9.js always wins — overwrite any value already in HTML.
+                if (JOINS.SHADES[key])
+                    card.setAttribute('data-' + attr.replace(/([A-Z])/g, '-$1').toLowerCase(),
+                                      JOINS.SHADES[key]);
+            };
+            set('joinOpen',  prefix + '_OPEN');
+            set('joinClose', prefix + '_CLOSE');
+            set('joinStop',  prefix + '_STOP');
+            set('joinPos',   prefix + '_POS');
+            set('joinFb',    prefix + '_FB');
+        });
+
+
+
+
+
+
+        // ── AC mode & fan buttons ───────────────────────────────────────
+        _qsa('.ac-mode-btn').forEach(btn => {
+            const key = AC_MODE_KEY[btn.dataset.mode];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+        _qsa('.ac-fan-btn').forEach(btn => {
+            const key = AC_FAN_KEY[btn.dataset.fan];
+            if (key && JOINS.AC && JOINS.AC[key]) btn.dataset.join = JOINS.AC[key];
+        });
+    }
+
+
+    /* ── Hub-link + heartbeat-driven .conn pill ────────────────────────────
+     * Wires the back-home button to navigate to the hub via the same shell
+     * APIs the hub itself uses for room navigation, and subscribes to the
+     * shared JHOME.SYSTEM.HEARTBEAT join so the room's .conn pill flips
+     * Online / Reconnecting / Offline based on CP4 liveness. */
+    let _hbLast_page9 = 0;
+    let _hbTicker_page9 = null;
+    function setupHubLink() {
+        // 1. Back-home button onclick handler (exposed for inline onclick).
+        window.goHome_page9 = function () {
+            const target = 'home';
+            let activeIndex = -1;
+            try {
+                if (typeof projectConfigModule !== 'undefined' &&
+                    typeof projectConfigModule.getNavigationPages === 'function') {
+                    const navPages = projectConfigModule.getNavigationPages();
+                    for (let i = 0; i < navPages.length; i++) {
+                        if (navPages[i].pageName === target) { activeIndex = i; break; }
+                    }
+                }
+            } catch (_) {}
+            if (activeIndex >= 0) {
+                const tv = document.querySelector('.triggerview') ||
+                           document.querySelector('ch5-triggerview');
+                try { tv && tv.setActiveView(activeIndex); } catch (_) {}
+            }
+            try {
+                if (typeof navigationModule !== 'undefined' &&
+                    typeof navigationModule.goToPage === 'function') {
+                    navigationModule.goToPage(target);
+                }
+            } catch (_) {}
+        };
+
+        // 2. Heartbeat-driven .conn pill. The HEARTBEAT join lives in
+        //    JHOME (window.JHOME.SYSTEM.HEARTBEAT) so all pages share the
+        //    same join number — wire it ONCE in SIMPL.
+        const conn = _gid('connStatus');
+        if (!conn) return;
+        const setConnState = (state, label) => {
+            conn.classList.remove('conn--ok', 'conn--warn', 'conn--bad');
+            conn.classList.add('conn--' + state);
+            const lbl = conn.querySelector('.conn-label');
+            if (lbl) lbl.textContent = label;
+        };
+
+        const hb = (typeof window !== 'undefined' && window.JHOME &&
+                    window.JHOME.SYSTEM && window.JHOME.SYSTEM.HEARTBEAT) || '';
+        if (!hasCrestron()) { setConnState('warn', 'Local Preview'); return; }
+        if (!hb)            { setConnState('ok',   'Online'); return; }
+
+        _hbLast_page9 = Date.now();
+        subBool(hb, () => { _hbLast_page9 = Date.now(); });
+
+        if (_hbTicker_page9) clearInterval(_hbTicker_page9);
+        _hbTicker_page9 = setInterval(() => {
+            const age = (Date.now() - _hbLast_page9) / 1000;
+            if      (age < 5)  setConnState('ok',   'Online');
+            else if (age < 12) setConnState('warn', 'Reconnecting');
+            else               setConnState('bad',  'Offline');
+        }, 1000);
+    }
+
+    // ====================== INIT ======================
+    function onInit() {
+        // ▸▸▸ EDIT-FOR-PAGE-N: change the log label to match your page.
+        console.log('✅ Page 9 Initialized');
+        applyJoinsToHtml();           // stamp data-join-* attrs from joins9.js
+        ensurePanelClosed();
+                                      // position:fixed escapes the CH5
+                                      // import-snippet's transform context
+                                      // dialog
+        buildAreaState();
+        setupWidgetNav();
+        setupGlobalLightsPresets();
+        setupAreaPanelControls();
+        setupShades();
+        setupAC();
+        setupTV();
+        setupMusic();
+        setupFeedbackSubscriptions();
+        setupHubLink();
+        requestCurrentStatus();
+        notifyActivePage();
+    }
+
+    // ====================== HOME OVERLAY (Modes / Functions / Shutdown / Weather) ======================
+
+
+    function ensurePanelClosed() {
+        _gid('areaPanel')       ?.classList.remove('open');
+        _gid('areaPanelOverlay')?.classList.remove('open');
+    }
+
+    function portalPanelToBody() {
+        if (panelPortalDone) return;
+        const panel   = _gid('areaPanel');
+        const overlay = _gid('areaPanelOverlay');
+        if (!panel || !overlay) return;
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        panelPortalDone = true;
+    }
+
+    let areaShutdownPortalDone = false;
+    // ====================== WIDGET MANAGEMENT ======================
+    /* Persist the last-chosen widget GLOBALLY across all pages.
+     *
+     * The user wants: pick TV on page9, navigate to page3 — page3 also
+     * shows TV. So the storage key is shared (NOT page-suffixed) and
+     * every pageN.js reads/writes the same slot.
+     *
+     * Three layers of persistence (any one is enough):
+     *   1) window.__activeWidget — survives so long as the browser
+     *      session/tab is alive (not cleared by snippet reloads or
+     *      DOM rebuilds).
+     *   2) localStorage (key = "activeWidget") — survives full reloads
+     *      and panel restarts.
+     *   3) sessionStorage — fallback for environments where localStorage
+     *      is blocked.
+     *
+     * The active widget is re-applied EVERY time the page's import-snippet
+     * fires its `loaded` event, not just on first init (see bootstrap at
+     * the bottom of this file).
+     *
+     * ▸▸▸ EDIT-FOR-PAGE-N: nothing to change — this code is identical
+     *                       in every pageN.js so all pages share the
+     *                       same global slot.
+     */
+    const WIDGET_STORAGE_KEY = 'activeWidget';   // GLOBAL — no page suffix.
+
+    function _safeStoreGet(key) {
+        try {
+            if (window.localStorage) {
+                const v = window.localStorage.getItem(key);
+                if (v) return v;
+            }
+        } catch (e) { /* localStorage disabled */ }
+        try {
+            if (window.sessionStorage) return window.sessionStorage.getItem(key);
+        } catch (e) { /* sessionStorage disabled */ }
+        return null;
+    }
+    function _safeStoreSet(key, value) {
+        try { if (window.localStorage)   window.localStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+        try { if (window.sessionStorage) window.sessionStorage.setItem(key, value); }
+        catch (e) { /* ignore */ }
+    }
+
+    function getStoredWidget() {
+        // Prefer the window cache (most up-to-date in current session),
+        // then localStorage / sessionStorage for cross-reload durability.
+        if (typeof window !== 'undefined' && window.__activeWidget) {
+            return window.__activeWidget;
+        }
+        return _safeStoreGet(WIDGET_STORAGE_KEY);
+    }
+
+    function setupWidgetNav() {
+        applyStoredWidget(/*fallbackToHtmlActive*/ true);
+    }
+
+    /* Re-applies whichever widget the user last chose. Called from
+     * setupWidgetNav() at first init AND from the bootstrap whenever
+     * the page snippet finishes loading (so re-entries to page9
+     * restore the right tab even if CH5 reset the DOM classes). */
+    function applyStoredWidget(fallbackToHtmlActive) {
+        const stored = getStoredWidget();
+        let target = null;
+        if (stored) target = _qs('.tab-btn[data-widget="' + stored + '"]');
+        if (!target && fallbackToHtmlActive) {
+            target = _qs('.tab-btn.active') || _qs('.tab-btn');
+        }
+        if (!target) return;
+        const widgetName = target.getAttribute('data-widget') || 'lights';
+        // Skip the work if the right widget is already active — avoids
+        // pointless re-renders / network sends on every navigation.
+        const widgetEl = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (widgetEl && widgetEl.classList.contains('active') && target.classList.contains('active')) {
+            return;
+        }
+        window.switchWidget_page9(widgetName, target);
+    }
+
+    window.switchWidget_page9 = function (widgetName, clickedBtn) {
+        _qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        _qsa('.widget').forEach(w => w.classList.remove('active'));
+        const active = document.getElementById('widget-' + widgetName + PAGE_SUFFIX);
+        if (active) active.classList.add('active');
+        // Remember the choice GLOBALLY so the same widget tab follows the
+        // user across every page in the app, not just this page.
+        if (typeof window !== 'undefined') window.__activeWidget = widgetName;
+        _safeStoreSet(WIDGET_STORAGE_KEY, widgetName);
+        // J9.SYSTEM.ACTIVE_WIDGET — serial: currently visible tab name
+        sendSerial(JOINS.SYSTEM.ACTIVE_WIDGET, widgetName);
+    };
+
+    window.switchTVSubWidget_page9 = function (subwidgetName, clickedBtn) {
+        // Scope queries to the TV widget so we don't accidentally
+        // de-activate the AC widget's sub-tab buttons (they share the
+        // .sub-tab-btn class) while switching between TV Controls and
+        // Favorites.
+        const tvRoot = _gid('widget-tv');
+        const scope  = tvRoot || PAGE_ROOT();
+        scope.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.tv-subwidget').forEach(w => w.classList.remove('active'));
+        // The HTML calls this with 'tv-controls' / 'tv-favorites' (no
+        // suffix); the real ids are 'tv-controls-page9' / 'tv-favorites-page9'.
+        // _gid() adds PAGE_SUFFIX so we look up the right element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.switchLightsSubWidget_page9 = function (subwidgetName, clickedBtn) {
+        // Scope to the lights widget so .sub-tab-btn toggles don't bleed
+        // into the TV or AC sub-tab navs (they share the same class).
+        const lightsRoot = _gid('widget-lights');
+        const scope = lightsRoot || PAGE_ROOT();
+        scope.querySelectorAll('.lights-sub-nav .sub-tab-btn')
+             .forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        scope.querySelectorAll('.lights-subwidget')
+             .forEach(w => w.classList.remove('active'));
+        // HTML passes 'lights-landscape' / 'lights-villa' / 'lights-street'
+        // (no suffix); _gid() appends PAGE_SUFFIX to find the right div.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    window.toggleTile_page9 = function (name, cls) {
+        const tog  = document.getElementById('tog-' + name);
+        const tile = document.getElementById('tile-' + name);
+        const lbl  = document.getElementById('lbl-' + name);
+        if (!tog || !tile || !lbl) return;
+        const isOn = tog.checked;
+        tile.classList.toggle(cls, isOn);
+        lbl.textContent = isOn ? 'ON' : 'OFF';
+    };
+
+    // ====================== LIGHTS: BUILD STATE FROM DOM ======================
+    function buildAreaState() {
+        _qsa('.area-card, .area-row[data-area]').forEach(card => {
+            const key = card.dataset.area;
+            if (!key) return;
+
+            const presetKeys = (card.dataset.presets || '').trim()
+                .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Build join map from data-join-<key> attributes.
+            // These attribute values must match J9.LIGHTS_<AREA>.<PRESET> in joins9.js.
+            const presetJoinMap = {};
+            presetKeys.forEach(pk => {
+                const j = (card.dataset['join' + capitalize(pk)] || '').trim();
+                if (j) presetJoinMap[pk] = j;
+            });
+
+            const overrideLabels = {};
+            presetKeys.forEach(pk => {
+                const v = (card.dataset['label' + capitalize(pk)] || '').trim();
+                if (v) overrideLabels[pk] = v;
+            });
+
+            // Build the dimmer-channels list. Each room may have up to 3:
+            //   * Main   - uses data-analog / data-fb (= J9.LIGHTS_<AREA>.DIMMER_SEND/FB)
+            //   * Accent - uses data-dim-accent / data-dim-accent-fb
+            //   * Wall   - uses data-dim-wall   / data-dim-wall-fb
+            // A channel is "present" only when its send attr is set; missing
+            // channels are simply not rendered in the popup.
+            const channels = [];
+            if (card.dataset.analog) {
+                channels.push({ key: 'main',   label: 'Main',   send: card.dataset.analog,    fb: card.dataset.fb || null });
+            }
+            if (card.dataset.dimAccent) {
+                channels.push({ key: 'accent', label: 'Accent', send: card.dataset.dimAccent, fb: card.dataset.dimAccentFb || null });
+            }
+            if (card.dataset.dimWall) {
+                channels.push({ key: 'wall',   label: 'Wall',   send: card.dataset.dimWall,   fb: card.dataset.dimWallFb || null });
+            }
+            const levels = {};
+            channels.forEach(ch => { levels[ch.key] = 0; });
+
+            areaState[key] = {
+                element: card,
+                label:   card.dataset.label || key,
+                icon:    card.dataset.icon  || '💡',
+                presets: presetKeys,
+                joins:   presetJoinMap,
+                labelOverrides: overrideLabels,
+                // Legacy single-dimmer aliases (kept so older code paths keep working).
+                analog:  card.dataset.analog || null,
+                fb:      card.dataset.fb     || null,
+                level:   0,
+                // New multi-channel state.
+                channels: channels,
+                levels:   levels,
+                isOn:    false,
+                preset:  'off',
+                chLevels: {},
+                chStates: {}
+            };
+
+            attachLongPress(card, (el) => window.openAreaPanel_page9(el, null), LONG_PRESS_MS);
+
+            // Optimistic preset-button highlight — no SIMPL round-trip needed.
+            const btnsDiv = card.querySelector('.area-row-btns');
+            if (btnsDiv) {
+                btnsDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.area-btn');
+                    if (!btn) return;
+                    const preset = btn.classList.contains('ab-on')    ? 'on'
+                                 : btn.classList.contains('ab-dim')   ? 'dim'
+                                 : btn.classList.contains('ab-relax') ? 'relax'
+                                 : btn.classList.contains('ab-off')   ? 'off'
+                                 : null;
+                    if (!preset) return;
+                    btnsDiv.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                    btn.classList.add('ab-active');
+                    setAreaVisual(key, preset);
+                });
+            }
+
+            // Visibly start every card in the OFF state so the slider thumb,
+            // border tint, and on-count badge all reflect the initial truth
+            // (isOn:false). Without this, cards render "blank" until the
+            // first user tap or feedback message arrives.
+            setAreaVisual(key, 'off');
+        });
+        updateOnCountBadge();
+    }
+
+    function labelFor(areaKey, presetKey) {
+        const st = areaState[areaKey];
+        if (st?.labelOverrides?.[presetKey]) return st.labelOverrides[presetKey];
+        return presetInfo(presetKey).label;
+    }
+
+    // ====================== LIGHTS: GLOBAL PRESET BAR ======================
+    function setupGlobalLightsPresets() {
+
+        // ── visually highlight the active room mode ───────────────────
+        // Adds .lglobal-active to one of the 4 mode buttons; per-button
+        // colour styling lives in page1.scss
+        // (.lglobal-morning/relax/dressing/sleep  + .lglobal-active).
+        // Only one button is "lit" at a time.
+        //   Morning  → green   • Dressing → orange (vivid)
+        //   Relax    → orange (warm amber – different scale) • Sleep → red
+        function setGlobalLightActive_(activeId) {
+            ['globalMorning','globalRelax','globalDressing','globalSleep'].forEach(id => {
+                const el = _gid(id);
+                if (el) el.classList.toggle('lglobal-active', id === activeId);
+            });
+        }
+
+        // J9.LIGHTS_GLOBAL.MORNING — digital: Morning Mode
+        // Standalone room-mode pulse — does NOT touch the per-room area
+        // cards (Bedroom / Bathroom / Dressing / Reading Light). Only
+        // the global join is fired and the mode button itself lights up.
+        _gid('globalMorning')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.MORNING);
+            setGlobalLightActive_('globalMorning');
+        });
+
+        // J9.LIGHTS_GLOBAL.RELAX — digital: Relax Mode
+        _gid('globalRelax')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.RELAX);
+            setGlobalLightActive_('globalRelax');
+        });
+
+        // J9.LIGHTS_GLOBAL.DRESSING — digital: Dressing Mode
+        _gid('globalDressing')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.DRESSING);
+            setGlobalLightActive_('globalDressing');
+        });
+
+        // J9.LIGHTS_GLOBAL.SLEEP — digital: Sleep Mode
+        _gid('globalSleep')?.addEventListener('click', () => {
+            pulse(JOINS.LIGHTS_GLOBAL.SLEEP);
+            setGlobalLightActive_('globalSleep');
+        });
+    }
+
+    // ====================== LIGHTS: VISUAL STATE ======================
+    function applyAllAreas(preset) {
+        // Pulse each room's individual preset join AND update its visual,
+        // so the global bar works even if the SIMPL program does not
+        // fan out the LIGHTS_GLOBAL signal to every room. The global pulse
+        // (J*.LIGHTS_GLOBAL.<preset>) was already fired by the click handler.
+        Object.keys(areaState).forEach(k => {
+            const st = areaState[k];
+            if (!st.presets.includes(preset)) return;
+            const j = st.joins[preset];
+            if (j) pulse(j);             // per-room digital pulse to CP4
+            setAreaVisual(k, preset);    // local UI update
+        });
+    }
+
+    function setAreaVisual(key, preset) {
+        const st = areaState[key];
+        if (!st) return;
+        st.preset = preset;
+        st.isOn   = (preset !== 'off');
+        const card = st.element;
+        // Clear every preset-related class so we can re-apply just one.
+        card.classList.remove(
+            'alit', 'arelax',
+            'apreset-on', 'apreset-dim', 'apreset-relax', 'apreset-off'
+        );
+        // Colour-coded tint for the four core presets — matches the
+        // global lights bar (green / orange / amber / red).
+        if (preset === 'on' || preset === 'dim' || preset === 'relax' || preset === 'off') {
+            card.classList.add('apreset-' + preset);
+        } else {
+            // Other presets (tv, guest, service, p10..p15) keep the
+            // generic amber "lit" look.
+            card.classList.add('alit');
+        }
+        // .aon drives the slider-thumb position in page1.scss - binary on/off cue.
+        card.classList.toggle('aon', st.isOn);
+        const sw = document.getElementById('abulb-' + key + PAGE_SUFFIX);
+        if (sw) sw.setAttribute('aria-checked', st.isOn ? 'true' : 'false');
+        if (currentPanelArea === key) refreshPanelStatus();
+        updateOnCountBadge();
+
+        const PRESET_DIM_LEVELS = { on: 100, dim: 50, relax: 30, off: 0 };
+        if (PRESET_DIM_LEVELS[preset] !== undefined) {
+            const lvl     = PRESET_DIM_LEVELS[preset];
+            const chState = lvl === 0 ? 'off' : 'on';
+            const section = AREA_JOIN_SECTION[key];
+            const J_      = section && JOINS[section];
+            const chCount = ((J_ && J_.CHANNELS) || []).length;
+            if (chCount > 0) {
+                if (!st.chLevels) st.chLevels = {};
+                if (!st.chStates) st.chStates = {};
+                for (let i = 0; i < chCount; i++) {
+                    st.chLevels[i] = lvl;
+                    st.chStates[i] = chState;
+                }
+                if (currentPanelArea === key) {
+                    const wrap = _gid('panelChannels');
+                    for (let i = 0; i < chCount; i++) {
+                        updateChRowVisual(i, lvl);
+                        if (wrap) updateChBtnVisual(wrap, i, chState);
+                    }
+                }
+            }
+        }
+    }
+
+    function updateOnCountBadge() {
+        const badge = _gid('lightsOnCount');
+        if (badge) badge.textContent = Object.values(areaState).filter(s => s.isOn).length + ' on';
+    }
+
+    // ====================== LIGHTS: AREA PANEL ======================
+
+    window.openAreaPanel_page9 = function (cardEl, event) {
+        if (event?.target?.closest('.acard-switch')) return;
+        const key = cardEl.dataset.area;
+        const st  = areaState[key];
+        if (!st) return;
+
+        portalPanelToBody();
+        currentPanelArea = key;
+
+        _gid('panelIco').textContent   = st.icon;
+        _gid('panelTitle').textContent = st.label;
+        _gid('panelSub').textContent   = 'Lighting Control';
+
+        renderPanelChannels(key);
+
+        refreshPanelStatus();
+        _gid('areaPanelOverlay').classList.add('open');
+        _gid('areaPanel').classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        // J9.SYSTEM.ACTIVE_AREA — serial: name of open lighting area popup
+        sendSerial(JOINS.SYSTEM.ACTIVE_AREA, st.label);
+    };
+
+    window.closeAreaPanel_page9 = function () {
+        _gid('areaPanelOverlay').classList.remove('open');
+        _gid('areaPanel').classList.remove('open');
+        document.body.style.overflow = '';
+        currentPanelArea = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentPanelArea) window.closeAreaPanel_page9();
+    });
+
+    // ── Channel-name persistence ─────────────────────────────────────────
+    function _chLblKey(areaKey, idx) { return 'ch_lbl_' + areaKey + '_' + idx; }
+    function getSavedChLabel(areaKey, idx, fallback) {
+        try { return localStorage.getItem(_chLblKey(areaKey, idx)) || fallback; }
+        catch (e) { return fallback; }
+    }
+    function saveChLabel(areaKey, idx, label) {
+        try { localStorage.setItem(_chLblKey(areaKey, idx), label); }
+        catch (e) { /* storage unavailable */ }
+    }
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Render one .ch-row per entry in JOINS[section].CHANNELS. */
+    function renderPanelChannels(areaKey) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const section  = AREA_JOIN_SECTION[areaKey];
+        const J_       = section && JOINS[section];
+        const channels = (J_ && J_.CHANNELS) || [];
+        const st       = areaState[areaKey];
+
+        channels.forEach((ch, i) => {
+            const lvl     = (st && st.chLevels && st.chLevels[i] != null) ? st.chLevels[i] : 0;
+            const chState = (st && st.chStates) ? (st.chStates[i] || null) : null;
+            const row = document.createElement('div');
+            row.className = 'ch-row';
+            row.dataset.chIndex = String(i);
+            row.innerHTML =
+                '<div class="ch-row-top">' +
+                  '<input type="text" class="ch-name-input"' +
+                         ' value="' + escAttr(getSavedChLabel(areaKey, i, ch.label)) + '"' +
+                         ' placeholder="Ch ' + (i + 1) + '">' +
+                  '<div class="ch-onoff">' +
+                    '<button class="ch-btn ch-on-btn' + (chState === 'on'  ? ' ch-btn-active' : '') + '" type="button"' +
+                            ' data-ch-on="' + (ch.ON || '') + '"' +
+                            ' aria-label="' + ch.label + ' on">ON</button>' +
+                    '<button class="ch-btn ch-off-btn' + (chState === 'off' ? ' ch-btn-active ch-off-active' : '') + '" type="button"' +
+                            ' data-ch-off="' + (ch.OFF || '') + '"' +
+                            ' aria-label="' + ch.label + ' off">OFF</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="ch-dim-wrap">' +
+                  '<div class="ch-dim-track">' +
+                    '<div class="ch-dim-fill" data-ch-fill="' + i + '"' +
+                         ' style="width:' + lvl + '%"></div>' +
+                    '<input type="range" class="ch-dim-slider"' +
+                           ' data-ch-send="' + (ch.DIM_SEND || '') + '"' +
+                           ' data-ch-idx="' + i + '"' +
+                           ' min="0" max="100" value="' + lvl + '"' +
+                           ' aria-label="' + ch.label + ' dimmer">' +
+                  '</div>' +
+                  '<span class="ch-dim-value" data-ch-val="' + i + '">' + lvl + '%</span>' +
+                '</div>';
+            wrap.appendChild(row);
+        });
+    }
+
+    function updateChRowVisual(idx, v) {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+        const fill   = wrap.querySelector('[data-ch-fill="' + idx + '"]');
+        const valEl  = wrap.querySelector('[data-ch-val="'  + idx + '"]');
+        const slider = wrap.querySelector('[data-ch-idx="'  + idx + '"]');
+        if (fill)   fill.style.width = v + '%';
+        if (valEl)  valEl.textContent = v + '%';
+        if (slider && document.activeElement !== slider) slider.value = v;
+    }
+
+    function updateChBtnVisual(wrap, idx, state) {
+        const row = wrap.querySelector('.ch-row[data-ch-index="' + idx + '"]');
+        if (!row) return;
+        const onBtn  = row.querySelector('.ch-on-btn');
+        const offBtn = row.querySelector('.ch-off-btn');
+        if (onBtn)  onBtn.classList.toggle('ch-btn-active', state === 'on');
+        if (offBtn) {
+            offBtn.classList.toggle('ch-btn-active',  state === 'off');
+            offBtn.classList.toggle('ch-off-active',  state === 'off');
+        }
+    }
+
+    function setChButtonState(idx, state) {
+        if (!currentPanelArea) return;
+        const st = areaState[currentPanelArea];
+        if (!st) return;
+        if (!st.chStates) st.chStates = {};
+        st.chStates[idx] = state;
+        const wrap = _gid('panelChannels');
+        if (wrap) updateChBtnVisual(wrap, idx, state);
+    }
+
+    function refreshPanelStatus() {
+        if (!currentPanelArea) return;
+        const st  = areaState[currentPanelArea];
+        const pill = _gid('panelStatusPill');
+        const txt  = _gid('panelStatusText');
+        if (!pill || !txt || !st) return;
+        pill.className = 'spill';
+        if      (st.preset === 'on')  pill.classList.add('sp-on');
+        else if (st.preset === 'off') pill.classList.add('sp-off');
+        else                          pill.classList.add('sp-dim');
+        txt.textContent = (labelFor(currentPanelArea, st.preset) || st.preset).toUpperCase();
+    }
+
+    // ====================== LIGHTS: PANEL CONTROLS ======================
+    function setupAreaPanelControls() {
+        const wrap = _gid('panelChannels');
+        if (!wrap) return;
+
+        wrap.addEventListener('change', (e) => {
+            const inp = e.target.closest('.ch-name-input');
+            if (!inp || !currentPanelArea) return;
+            const idx = parseInt(inp.closest('.ch-row').dataset.chIndex, 10);
+            const label = inp.value.trim() || inp.placeholder;
+            inp.value = label;
+            saveChLabel(currentPanelArea, idx, label);
+        });
+
+        wrap.addEventListener('click', (e) => {
+            const onBtn  = e.target.closest('.ch-on-btn');
+            const offBtn = e.target.closest('.ch-off-btn');
+            if (onBtn && onBtn.dataset.chOn) {
+                const idx = parseInt(onBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(onBtn.dataset.chOn);
+                setChButtonState(idx, 'on');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 100;
+                    updateChRowVisual(idx, 100);
+                }
+            }
+            if (offBtn && offBtn.dataset.chOff) {
+                const idx = parseInt(offBtn.closest('.ch-row').dataset.chIndex, 10);
+                pulse(offBtn.dataset.chOff);
+                setChButtonState(idx, 'off');
+                if (currentPanelArea && areaState[currentPanelArea]) {
+                    if (!areaState[currentPanelArea].chLevels) areaState[currentPanelArea].chLevels = {};
+                    areaState[currentPanelArea].chLevels[idx] = 0;
+                    updateChRowVisual(idx, 0);
+                }
+            }
+        });
+
+        wrap.addEventListener('input', (e) => {
+            const slider = e.target.closest('.ch-dim-slider');
+            if (!slider || !currentPanelArea) return;
+            const st = areaState[currentPanelArea];
+            if (!st) return;
+            if (!st.chLevels) st.chLevels = {};
+            const send = slider.dataset.chSend;
+            const idx  = parseInt(slider.dataset.chIdx, 10);
+            const v    = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+            st.chLevels[idx] = v;
+            updateChRowVisual(idx, v);
+            if (send) sendAnalog(send, v);
+        });
+    }
+
+    /* Reflect a channel's value back to its row UI (text + fill + slider).
+     * Called both on user input and on feedback subscriptions. */
+    function updateDimRowVisual(channelKey, level) {
+        const wrap = _gid('panelDimmers');
+        if (!wrap) return;
+        const valueEl = wrap.querySelector('.dim-row-value[data-channel="' + channelKey + '"]');
+        if (valueEl) valueEl.textContent = level + '%';
+        const fillEl = wrap.querySelector('.dim-row-fill[data-channel="' + channelKey + '"]');
+        if (fillEl) fillEl.style.width = level + '%';
+        const slider = wrap.querySelector('.dim-row-slider[data-channel="' + channelKey + '"]');
+        if (slider && document.activeElement !== slider) slider.value = level;
+    }
+
+    // ====================== LIGHTS: LAMP TOGGLE ======================
+    window.handleAreaLampToggle_page9 = function (key, event) {
+        if (event) event.stopPropagation();
+        const st = areaState[key];
+        if (!st) return;
+        const preset = st.isOn ? 'off' : 'on';
+        const join   = st.joins[preset];
+        if (join) {
+            pulse(join); // join = data-join-on/off on card = J9.LIGHTS_<AREA>.ON/OFF
+        } else {
+            console.warn('[lights] No data-join-' + preset + ' on area "' + key + '"');
+        }
+        setAreaVisual(key, preset);
+    };
+
+    // ====================== LIGHTS: PANEL ARC DIAL ======================
+    function updatePanelDial(pct) {
+        const fill  = _gid('panel-arc-fill');
+        const label = _gid('panel-arc-label');
+        if (!fill) return;
+        const cx = 100, cy = 105, r = 76;
+        const rad = (-180 + pct * 1.8) * Math.PI / 180;
+        const ex = cx + r * Math.cos(rad);
+        const ey = cy + r * Math.sin(rad);
+        if      (pct <= 0)   fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 24.001 105');
+        else if (pct >= 100) fill.setAttribute('d', 'M 24 105 A 76 76 0 0 1 176 105');
+        else {
+            fill.setAttribute('d',
+                `M 24 105 A 76 76 0 ${pct > 50 ? 1 : 0} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`);
+        }
+        if (label) label.textContent = pct + '%';
+    }
+
+    // ====================== LIGHTS: FEEDBACK SUBSCRIPTIONS ======================
+    function setupLightsFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(key => {
+            const st = areaState[key];
+
+            // A <- per-channel dimmer feedback. Subscribes to every channel
+            // declared on the card (Main / Accent / Wall - only the ones
+            // actually present, since channels[] only contains those).
+            (st.channels || []).forEach(ch => {
+                if (!ch.fb) return;
+                subAnalog(ch.fb, (val) => {
+                    const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                    st.levels[ch.key] = v;
+                    if (ch.key === 'main') st.level = v;
+                    if (currentPanelArea === key) updateDimRowVisual(ch.key, v);
+                });
+            });
+
+            // D ← preset feedback (join = send join + 100, per convention in joins9.js)
+            const FB_OFFSET = 100;
+            st.presets.forEach(preset => {
+                const sendJoin = st.joins[preset];
+                if (!sendJoin) return;
+                const fbJoin = String(parseInt(sendJoin, 10) + FB_OFFSET);
+                subBool(fbJoin, (isHigh) => {
+                    if (isHigh) setAreaVisual(key, preset);
+                });
+            });
+        });
+    }
+
+    // ====================== SHADES ======================
+    // Big-buttons + position-bar design.
+    // Joins come from data-join-* attributes on each .shade-card in page9.html
+    // and must match the J9.SHADES.* constants in joins9.js.
+    const SHADE_TRAVEL_MS = 38000;   // full 0 → 100 traverse time (38 s per real motor speed)
+    const shadeState = {};
+
+    function setupShades() {
+        _qsa('.shade-card').forEach(card => buildShadeCard(card));
+        updateShadesOpenCount();
+    }
+
+    function buildShadeCard(card) {
+        const key      = card.dataset.shade;
+        const label    = card.dataset.label       || 'Shade';
+        const icon     = card.dataset.icon        || '🪟';
+        const joinOpen = card.dataset.joinOpen;   // = J9.SHADES.<n>_OPEN
+        const joinClose= card.dataset.joinClose;  // = J9.SHADES.<n>_CLOSE
+        const joinStop = card.dataset.joinStop;   // = J9.SHADES.<n>_STOP
+        const joinFb   = card.dataset.joinFb;     // = J9.SHADES.<n>_FB
+
+        shadeState[key] = {
+            pos:       0,
+            isOpen:    false,
+            direction: null,   // null | 'opening' | 'closing'
+            startedAt: 0,
+            startPos:  0,
+            rafId:     null
+        };
+
+        card.innerHTML = `
+          <div class="sc-top">
+            <span class="sc-icon">${icon}</span>
+            <div class="sc-info">
+              <div class="sc-name">${label}</div>
+              <div class="sc-status" id="sstat-${key}${PAGE_SUFFIX}">
+                <span class="sc-dot"></span>
+                <span id="sstat-txt-${key}${PAGE_SUFFIX}">Closed</span>
+              </div>
+            </div>
+            <span class="sc-pct" id="spct-${key}${PAGE_SUFFIX}">0%</span>
+          </div>
+          <div class="sc-bar">
+            <div class="sc-bar-fill" id="sbar-${key}${PAGE_SUFFIX}"></div>
+          </div>
+          <div class="sc-actions">
+            <button class="sc-btn sc-btn-open" id="sopen-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▲</span>
+              <span class="sc-btn-lbl">Open</span>
+            </button>
+            <button class="sc-btn sc-btn-stop" id="sstop-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">■</span>
+              <span class="sc-btn-lbl">Stop</span>
+            </button>
+            <button class="sc-btn sc-btn-close" id="sclose-${key}${PAGE_SUFFIX}">
+              <span class="sc-btn-ico">▼</span>
+              <span class="sc-btn-lbl">Close</span>
+            </button>
+          </div>
+        `;
+
+        // Wire up control buttons
+        const openBtn  = document.getElementById('sopen-'  + key + PAGE_SUFFIX);
+        const stopBtn  = document.getElementById('sstop-'  + key + PAGE_SUFFIX);
+        const closeBtn = document.getElementById('sclose-' + key + PAGE_SUFFIX);
+
+        if (openBtn) openBtn.addEventListener('click', () => {
+            pulse(joinOpen);
+            startShadeMotion(key, 'opening');
+            flashBtn(openBtn);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            pulse(joinClose);
+            startShadeMotion(key, 'closing');
+            flashBtn(closeBtn);
+        });
+        if (stopBtn) stopBtn.addEventListener('click', () => {
+            pulse(joinStop);
+            stopShadeMotion(key);
+            flashBtn(stopBtn);
+        });
+
+        // Initial visual at pos 0 (closed)
+        renderShadeVisual(key, 0);
+
+        // A ← J9.SHADES.<n>_FB — position feedback 0–100
+        // If a real FB join is wired, it overrides the local timer estimate:
+        // any incoming value clears direction + rafId so tickShade stops fighting it.
+        if (joinFb && hasCrestron()) {
+            subAnalog(joinFb, (val) => {
+                const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                const st = shadeState[key];
+                if (st && st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
+                if (st) {
+                    st.direction = null;
+                    st.pos       = v;
+                    st.isOpen    = v > 5;
+                }
+                renderShadeVisual(key, v);
+                updateShadeFeedback(key, v);
+                updateShadesOpenCount();
+            });
+        }
+    }
+
+    function flashBtn(btn) {
+        btn.classList.add('sc-btn-flash');
+        setTimeout(() => btn.classList.remove('sc-btn-flash'), 220);
+    }
+
+    function renderShadeVisual(key, pos) {
+        // pos: 0 = fully closed, 100 = fully open. The bar fill represents how open it is.
+        const bar = document.getElementById('sbar-' + key + PAGE_SUFFIX);
+        if (bar) bar.style.width = pos + '%';
+        const pct = document.getElementById('spct-' + key + PAGE_SUFFIX);
+        if (pct) pct.textContent = pos + '%';
+    }
+
+    function setShadeStatusText(key, text) {
+        const el = document.getElementById('sstat-txt-' + key + PAGE_SUFFIX);
+        if (el) el.textContent = text;
+    }
+
+    function setShadeCardState(card, state) {
+        card.classList.remove('sc-s-open', 'sc-s-closed', 'sc-s-moving', 'sc-s-stopped');
+        if (state) card.classList.add('sc-s-' + state);
+    }
+
+    function startShadeMotion(key, dir) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (dir === 'opening' && st.pos >= 100 && st.direction === null) return;
+        if (dir === 'closing' && st.pos <= 0   && st.direction === null) return;
+        if (st.direction === dir) return;
+
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+
+        st.direction = dir;
+        st.startedAt = performance.now();
+        st.startPos  = st.pos;
+
+        setShadeStatusText(key, dir === 'opening' ? 'Opening…' : 'Closing…');
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'moving');
+
+        tickShade(key);
+    }
+
+    function tickShade(key) {
+        const st = shadeState[key];
+        if (!st || !st.direction) return;
+
+        const elapsed = performance.now() - st.startedAt;
+        const delta   = (elapsed / SHADE_TRAVEL_MS) * 100;
+        let pos;
+        if (st.direction === 'opening') pos = Math.min(100, st.startPos + delta);
+        else                            pos = Math.max(0,   st.startPos - delta);
+
+        st.pos    = pos;
+        st.isOpen = pos > 5;
+        renderShadeVisual(key, Math.round(pos));
+        updateShadesOpenCount();
+
+        const done = (st.direction === 'opening' && pos >= 100)
+                  || (st.direction === 'closing' && pos <= 0);
+
+        if (done) {
+            st.direction = null;
+            st.rafId     = null;
+            const card = _qs(`[data-shade="${key}"]`);
+            if (card) setShadeCardState(card, pos >= 100 ? 'open' : 'closed');
+            setShadeStatusText(key, pos >= 100 ? 'Opened' : 'Closed');
+            return;
+        }
+
+        st.rafId = requestAnimationFrame(() => tickShade(key));
+    }
+
+    function stopShadeMotion(key) {
+        const st = shadeState[key];
+        if (!st) return;
+        if (st.rafId) cancelAnimationFrame(st.rafId);
+        st.rafId     = null;
+        st.direction = null;
+
+        const pct  = Math.round(st.pos);
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) setShadeCardState(card, 'stopped');
+        setShadeStatusText(key, `Stopped at ${pct}%`);
+    }
+
+    function updateShadeFeedback(key, pos) {
+        const card = _qs(`[data-shade="${key}"]`);
+        if (card) {
+            if      (pos >= 95) setShadeCardState(card, 'open');
+            else if (pos <= 5)  setShadeCardState(card, 'closed');
+            else                setShadeCardState(card, 'moving');
+        }
+        setShadeStatusText(key, pos >= 95 ? 'Open' : pos <= 5 ? 'Closed' : pos + '%');
+    }
+
+    function updateShadesOpenCount() {
+        const badge = _gid('shadesOpenCount');
+        if (badge) badge.textContent = Object.values(shadeState).filter(s => s.isOpen).length + ' open';
+    }
+
+    // ====================== CLIMATE: AC + HEATER ======================
+
+    window.switchACSubWidget_page9 = function (subwidgetName, clickedBtn) {
+        const root = _gid('widget-ac');
+        if (!root) return;
+        root.querySelectorAll('.sub-tab-btn').forEach(b => b.classList.remove('active'));
+        if (clickedBtn) clickedBtn.classList.add('active');
+        root.querySelectorAll('.ac-subwidget').forEach(w => w.classList.remove('active'));
+        // HTML calls this with 'ac-ac' / 'ac-heater' (no suffix); the real
+        // ids are 'ac-ac-page9' / 'ac-heater-page9'. _gid() applies
+        // PAGE_SUFFIX so the lookup actually finds the element.
+        const el = _gid(subwidgetName);
+        if (el) el.classList.add('active');
+    };
+
+    function setupAC() {
+
+        /* Shared arc-dial factory for AC and Heater.
+         * All joins are passed in by the caller via analogSendJoin / analogFbJoin
+         * which are set to J9.AC.* or J9.HEATER.* values below.
+         *   analogSendJoin   panel -> SIMPL  (setpoint write)
+         *   analogSpFbJoin   panel <- SIMPL  (setpoint echo / current SP)
+         *   analogFbJoin     panel <- SIMPL  (room temp)
+         *   powerFbJoin      panel <- SIMPL  (digital, true = power on)
+         */
+        function makeDialController({ trackBgId, arcPathId, ticksId, dialTempId,
+                                      MIN, MAX, getTemp, setTemp,
+                                      analogSendJoin, analogSpFbJoin, analogFbJoin,
+                                      powerBtnId, powerFbJoin,
+                                      cardSel, statusBadgeId, statusLabel }) {
+
+            const CX = 110, CY = 110, R = 88;
+            const START_DEG = 145, TOTAL_DEG = 250;
+
+            // All these ids are page-suffixed in the HTML
+            // (e.g. acArcPath-page9) so we MUST go through _gid() — using
+            // raw document.getElementById() returns null and the dial,
+            // ticks, temperature read-out and power-button click handler
+            // all silently no-op (= "the line bar disappeared, the
+            // enable / +/- buttons do nothing").
+            const card        = _qs(cardSel);
+            const powerBtn    = _gid(powerBtnId);
+            const arcPath     = _gid(arcPathId);
+            const trackBg     = _gid(trackBgId);
+            const ticksG      = _gid(ticksId);
+            const dialTemp    = _gid(dialTempId);
+            const statusBadge = statusBadgeId ? _gid(statusBadgeId) : null;
+            let isOn = true;
+
+            const degToRad = d => d * Math.PI / 180;
+            function polarPoint(deg) {
+                return { x: CX + R * Math.cos(degToRad(deg)), y: CY + R * Math.sin(degToRad(deg)) };
+            }
+            function arcD(fromDeg, toDeg) {
+                const s = polarPoint(fromDeg), e = polarPoint(toDeg);
+                let sweep = toDeg - fromDeg; if (sweep < 0) sweep += 360;
+                return `M ${s.x} ${s.y} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${e.x} ${e.y}`;
+            }
+            function buildTicks() {
+                if (!ticksG) return;
+                ticksG.innerHTML = '';
+                for (let i = 0; i <= 15; i++) {
+                    const deg = START_DEG + (i / 15) * TOTAL_DEG;
+                    const pt  = polarPoint(deg);
+                    const ln  = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', pt.x); ln.setAttribute('y1', pt.y);
+                    ln.setAttribute('x2', CX + (R - 8) * Math.cos(degToRad(deg)));
+                    ln.setAttribute('y2', CY + (R - 8) * Math.sin(degToRad(deg)));
+                    ln.setAttribute('stroke', 'rgba(255,255,255,0.25)');
+                    ln.setAttribute('stroke-width', i % 5 === 0 ? '2' : '1');
+                    ln.setAttribute('stroke-linecap', 'round');
+                    ticksG.appendChild(ln);
+                }
+            }
+            function updateDial() {
+                if (!arcPath || !trackBg) return;
+                const endDeg = START_DEG + ((getTemp() - MIN) / (MAX - MIN)) * TOTAL_DEG;
+                trackBg.setAttribute('d', arcD(START_DEG, START_DEG + TOTAL_DEG));
+                arcPath.setAttribute('d', arcD(START_DEG, endDeg));
+                if (dialTemp) dialTemp.textContent = getTemp() + '°';
+            }
+            function updatePowerUI() {
+                if (!powerBtn) return;
+                powerBtn.dataset.on = isOn ? 'true' : 'false';
+                if (card) card.classList.toggle('ac-is-off', !isOn);
+                if (statusBadge) statusBadge.textContent = (statusLabel || 'Master Robe') + ' • ' + (isOn ? 'ON' : 'OFF');
+            }
+            function flashBtn(btn) {
+                if (!btn) return;
+                btn.classList.remove('ac-flash');
+                void btn.offsetWidth;
+                btn.classList.add('ac-flash');
+                setTimeout(() => btn.classList.remove('ac-flash'), 400);
+            }
+
+            // Local-tap toggle (optimistic UI). The real source of truth is powerFbJoin
+            // below — when SIMPL echoes the new state, it overrides our optimistic flip.
+            powerBtn?.addEventListener('click', () => { isOn = !isOn; updatePowerUI(); });
+
+            // D ← power state feedback (e.g. J9.AC.POWER_FB / J9.HEATER.POWER_FB).
+            // Lets SIMPL drive the panel UI when power is changed externally
+            // (house-mode scene, all-off, voice control, etc.).
+            if (powerFbJoin) {
+                subBool(powerFbJoin, (val) => {
+                    isOn = !!val;
+                    updatePowerUI();
+                });
+            }
+
+            // A ← room temp feedback — analogFbJoin = J9.AC.ROOM_TEMP_FB or J9.HEATER.ROOM_TEMP_FB
+            if (analogFbJoin) {
+                subAnalog(analogFbJoin, (val) => {
+                    const el = dialTempId === 'acDialTemp'
+                        ? _gid('acCurrentTemp')
+                        : _gid('htrCurrentTemp');
+                    if (el) el.textContent = Math.round(val) + '°';
+                });
+            }
+
+            // A ← setpoint feedback. Defaults to analogSendJoin so AC (which has
+            // SP_SEND === SP_FB) still works without an explicit analogSpFbJoin.
+            const spFbToWatch = analogSpFbJoin || analogSendJoin;
+            if (spFbToWatch) {
+                subAnalog(spFbToWatch, (val) => {
+                    setTemp(Math.max(MIN, Math.min(MAX, Math.round(val))));
+                    updateDial();
+                });
+            }
+
+            buildTicks(); updateDial(); updatePowerUI();
+            return { updateDial, flashBtn, isOnRef: () => isOn };
+        }
+
+        /* ── AC sub-widget ──────────────────────────────────────────────────── */
+        let acSetTemp = 17, acMode = 'cool', acFan = 'high';
+        const AC_MIN = 16, AC_MAX = 30;
+
+        const acCtrl = makeDialController({
+            trackBgId: 'acTrackBg', arcPathId: 'acArcPath',
+            ticksId:   'acTicks',   dialTempId: 'acDialTemp',
+            MIN: AC_MIN, MAX: AC_MAX,
+            getTemp: () => acSetTemp,
+            setTemp: (v) => { acSetTemp = v; },
+            analogSendJoin: JOINS.AC.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.AC.SP_FB,         // A ← setpoint echo (same join here, but explicit)
+            analogFbJoin:   JOINS.AC.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'acPowerBtn',
+            powerFbJoin:   JOINS.AC.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-ac-page9 .ac-card',
+            statusBadgeId: 'acStatusBadge',
+            statusLabel:   'Master Robe'
+        });
+
+        // D → J9.AC.POWER — AC power toggle
+        _gid('acPowerBtn')?.addEventListener('click', () => pulse(JOINS.AC.POWER));
+
+        // AC setpoint − / +
+        const acDecBtn = _gid('acDecBtn');
+        const acIncBtn = _gid('acIncBtn');
+        acDecBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp <= AC_MIN) return;
+            acSetTemp--;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J9.AC.SP_SEND
+            acCtrl.flashBtn(acDecBtn);
+        });
+        acIncBtn?.addEventListener('click', () => {
+            if (!acCtrl.isOnRef() || acSetTemp >= AC_MAX) return;
+            acSetTemp++;
+            acCtrl.updateDial();
+            sendAnalog(JOINS.AC.SP_SEND, acSetTemp); // A → J9.AC.SP_SEND
+            acCtrl.flashBtn(acIncBtn);
+        });
+
+        // AC mode buttons — data-join on each button must match J9.AC.MODE_* in joins1.js
+        _qsa('.ac-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acMode = btn.dataset.mode;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === acMode));
+                pulse(btn.dataset.join); // data-join = J9.AC.MODE_*
+            });
+        });
+
+        // D ← AC mode feedback — sync active highlight when SIMPL changes mode
+        const AC_MODE_FB = {
+            auto: JOINS.AC.MODE_AUTO_FB,    cool: JOINS.AC.MODE_COOL_FB,
+            heat: JOINS.AC.MODE_HEAT_FB,    dry:  JOINS.AC.MODE_DRY_FB,
+            fan:  JOINS.AC.MODE_FAN_ONLY_FB
+        };
+        Object.entries(AC_MODE_FB).forEach(([modeKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;        // only react to TRUE — the active mode pulse
+                acMode = modeKey;
+                _qsa('.ac-mode-btn').forEach(b =>
+                    b.classList.toggle('ac-mode-active', b.dataset.mode === modeKey));
+            });
+        });
+
+        // AC fan buttons — data-join on each button must match J9.AC.FAN_* in joins1.js
+        _qsa('.ac-fan-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!acCtrl.isOnRef()) return;
+                acFan = btn.dataset.fan;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === acFan));
+                pulse(btn.dataset.join); // data-join = J9.AC.FAN_*
+            });
+        });
+
+        // D ← AC fan feedback — sync active highlight when SIMPL changes fan speed
+        const AC_FAN_FB = {
+            auto: JOINS.AC.FAN_AUTO_FB,  low:  JOINS.AC.FAN_LOW_FB,
+            med:  JOINS.AC.FAN_MED_FB,   high: JOINS.AC.FAN_HIGH_FB
+        };
+        Object.entries(AC_FAN_FB).forEach(([fanKey, join]) => {
+            if (!join) return;
+            subBool(join, (val) => {
+                if (!val) return;
+                acFan = fanKey;
+                _qsa('.ac-fan-btn').forEach(b =>
+                    b.classList.toggle('ac-fan-active', b.dataset.fan === fanKey));
+            });
+        });
+
+        /* ── Heater sub-widget ─────────────────────────────────────────────── */
+        let htrSetTemp = 22;
+        const HTR_MIN = 16, HTR_MAX = 35;
+
+        const htrCtrl = makeDialController({
+            trackBgId: 'htrTrackBg', arcPathId: 'htrArcPath',
+            ticksId:   'htrTicks',   dialTempId: 'htrDialTemp',
+            MIN: HTR_MIN, MAX: HTR_MAX,
+            getTemp: () => htrSetTemp,
+            setTemp: (v) => { htrSetTemp = v; },
+            analogSendJoin: JOINS.HEATER.SP_SEND,       // A → target temp
+            analogSpFbJoin: JOINS.HEATER.SP_FB,         // A ← setpoint feedback (different join!)
+            analogFbJoin:   JOINS.HEATER.ROOM_TEMP_FB,  // A ← room temp
+            powerBtnId:    'htrPowerBtn',
+            powerFbJoin:   JOINS.HEATER.POWER_FB,       // D ← power state from SIMPL
+            cardSel:       '#ac-heater-page9 .ac-card',
+            statusBadgeId: null
+        });
+
+        // D → J9.HEATER.POWER — heater power toggle
+        _gid('htrPowerBtn')?.addEventListener('click', () => pulse(JOINS.HEATER.POWER));
+
+        // Heater setpoint − / +
+        const htrDecBtn = _gid('htrDecBtn');
+        const htrIncBtn = _gid('htrIncBtn');
+        htrDecBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp <= HTR_MIN) return;
+            htrSetTemp--;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J9.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrDecBtn);
+        });
+        htrIncBtn?.addEventListener('click', () => {
+            if (!htrCtrl.isOnRef() || htrSetTemp >= HTR_MAX) return;
+            htrSetTemp++;
+            htrCtrl.updateDial();
+            sendAnalog(JOINS.HEATER.SP_SEND, htrSetTemp); // A → J9.HEATER.SP_SEND
+            htrCtrl.flashBtn(htrIncBtn);
+        });
+    }
+
+    // ====================== TV ======================
+    function setupTV() {
+
+        // D -> J9.TV.POWER - TV power toggle (#tvPowerBtn2 in TV Controls)
+        _gid('tvPowerBtn2')?.addEventListener('click', () => pulse(JOINS.TV.POWER));
+
+        // D -> J9.TV.SOURCE - cycle input source
+        _gid('tvSourceBtn')?.addEventListener('click', () => pulse(JOINS.TV.SOURCE));
+
+        // D -> J9.TV.VOL_UP / VOL_DOWN / MUTE / CH_UP / CH_DOWN
+        _gid('tvVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('tvVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('tvMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('tvChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('tvChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+
+        // D -> J9.TV.FAV_BASE + index  (join '110'-'119')
+        _qsa('.fav-btn').forEach((btn, i) => {
+            const join = String(JOINS.TV.FAV_BASE + i);
+            btn.addEventListener('click', () => {
+                pulse(join);
+                console.log(`[TV] Favorite ${i + 1} -> Digital Join ${join}`);
+            });
+        });
+
+        // TV Controls dpad/keypad - pulses J9.TV.DPAD_* / KEYPAD_BASE+i / KEY_*
+        // (shared TV remote, not per-app). Buttons live inside #tv-controls-page9.
+        _gid('tvDpadUp')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_UP));
+        _gid('tvDpadDown') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_DOWN));
+        _gid('tvDpadLeft') ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_LEFT));
+        _gid('tvDpadRight')?.addEventListener('click', () => pulse(JOINS.TV.DPAD_RIGHT));
+        _gid('tvDpadOk')   ?.addEventListener('click', () => pulse(JOINS.TV.DPAD_OK));
+
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('tvKey' + i + PAGE_SUFFIX);
+            if (btn) {
+                const join = String(JOINS.TV.KEYPAD_BASE + i);
+                btn.addEventListener('click', () => pulse(join));
+            }
+        }
+        _gid('tvKeyEnter')?.addEventListener('click', () => pulse(JOINS.TV.KEY_ENTER));
+        _gid('tvHome')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_HOME));
+        _gid('tvMenu')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_MENU));
+        _gid('tvChList')  ?.addEventListener('click', () => pulse(JOINS.TV.KEY_CHLIST));
+        _gid('tvBack')    ?.addEventListener('click', () => pulse(JOINS.TV.KEY_BACK));
+
+        // App-remote view (.tv-app-view) - wire dpad / keypad buttons once;
+        // the joins they pulse are looked up from the active app each click.
+        wireAppPanelButtons();
+    }
+
+    // ====================== APP REMOTE POPUP ======================
+    /* The 5 quick-grid buttons (OSN / Apple TV / BeIN / Shahid / Netflix)
+     * all open the same .app-panel modal. The dpad + keypad buttons inside
+     * the modal have generic ids (e.g. appDpadUp-page9, appKey1-page9) and
+     * a single click handler that reads _activeApp and pulses the matching
+     * join from J9.APPS.<APP_KEY>. This keeps the DOM small (one set of
+     * buttons, not 5x) and means new apps are added by editing ONLY (a) the
+     * quick-grid in page9.html and (b) joins9.js -> APPS. */
+    const APP_META = {
+        osn:     { label: 'OSN',         icon: '🛰️', joinKey: 'OSN'     },
+        appletv: { label: 'Apple TV',    icon: '🍎', joinKey: 'APPLETV' },
+        bein:    { label: 'BeIN Sports', icon: '⚽', joinKey: 'BEIN'    },
+        shahid:  { label: 'Shahid',      icon: '🎬', joinKey: 'SHAHID'  },
+        netflix: { label: 'Netflix',     icon: '📼', joinKey: 'NETFLIX' },
+    };
+    let _activeApp = null;
+
+    function appJoin(key) {
+        // Look up a join name (e.g. 'DPAD_UP') in the active app's section.
+        if (!_activeApp) return null;
+        const meta = APP_META[_activeApp];
+        const sec  = meta && JOINS.APPS && JOINS.APPS[meta.joinKey];
+        return sec ? sec[key] : null;
+    }
+
+    function wireAppPanelButtons() {
+        // Dpad
+        _gid('appDpadUp')   ?.addEventListener('click', () => pulse(appJoin('DPAD_UP')));
+        _gid('appDpadDown') ?.addEventListener('click', () => pulse(appJoin('DPAD_DOWN')));
+        _gid('appDpadLeft') ?.addEventListener('click', () => pulse(appJoin('DPAD_LEFT')));
+        _gid('appDpadRight')?.addEventListener('click', () => pulse(appJoin('DPAD_RIGHT')));
+        _gid('appDpadOk')   ?.addEventListener('click', () => pulse(appJoin('DPAD_OK')));
+
+        // Numeric keys 0..9
+        for (let i = 0; i <= 9; i++) {
+            const btn = document.getElementById('appKey' + i + PAGE_SUFFIX);
+            if (btn) btn.addEventListener('click', () => pulse(appJoin('KEY_' + i)));
+        }
+
+        // Function keys
+        _gid('appBack')     ?.addEventListener('click', () => pulse(appJoin('KEY_BACK')));
+        _gid('appHome')     ?.addEventListener('click', () => pulse(appJoin('KEY_HOME')));
+        _gid('appMenu')     ?.addEventListener('click', () => pulse(appJoin('KEY_MENU')));
+
+        // Volume + channel inside the popup share the existing TV joins
+        // (volume is TV hardware, not per-app). Keep the wiring here so all
+        // app-panel buttons live in one place.
+        _gid('appVolUpBtn')  ?.addEventListener('click', () => pulse(JOINS.TV.VOL_UP));
+        _gid('appVolDownBtn')?.addEventListener('click', () => pulse(JOINS.TV.VOL_DOWN));
+        _gid('appMuteBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.MUTE));
+        _gid('appChUpBtn')   ?.addEventListener('click', () => pulse(JOINS.TV.CH_UP));
+        _gid('appChDownBtn') ?.addEventListener('click', () => pulse(JOINS.TV.CH_DOWN));
+    }
+
+    /* Swap the TV widget content: hide the main TV view, show the per-app
+     * remote view in its place. No overlay, no popup - both views are
+     * siblings inside #widget-tv-page9 and toggle via the [hidden] attr. */
+    window.openAppPanel_page9 = function(appKey) {
+        const meta = APP_META[appKey];
+        if (!meta) { console.warn('[apps] Unknown app key:', appKey); return; }
+        _activeApp = appKey;
+        // Pulse the per-room launcher join (see JOINS.LAUNCHERS in joins9.js).
+        const launchJoin = JOINS.LAUNCHERS && JOINS.LAUNCHERS[appKey.toUpperCase()];
+        if (launchJoin) pulse(launchJoin);
+        const titleEl = _gid('appPanelTitle');
+        const icoEl   = _gid('appPanelIco');
+        const subEl   = _gid('appPanelSub');
+        if (titleEl) titleEl.textContent = meta.label;
+        if (icoEl)   icoEl.textContent   = meta.icon;
+        if (subEl)   subEl.textContent   = meta.label + ' Remote';
+        _gid('tvMainView')?.setAttribute('hidden', '');
+        _gid('tvAppView') ?.removeAttribute('hidden');
+    };
+
+    window.closeAppPanel_page9 = function() {
+        _gid('tvAppView') ?.setAttribute('hidden', '');
+        _gid('tvMainView')?.removeAttribute('hidden');
+        _activeApp = null;
+    };
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _activeApp) window.closeAppPanel_page9();
+    });
+
+    // ====================== MUSIC WIDGET ======================
+    /* Five buttons:
+     *   • Air Play  (centred)  → JOINS.MUSIC.AIRPLAY
+     *   • Vol +                → JOINS.MUSIC.VOL_UP
+     *   • Vol −                → JOINS.MUSIC.VOL_DOWN
+     *   • Mute                 → JOINS.MUSIC.MUTE
+     *   • Power Off            → JOINS.MUSIC.POWER_OFF
+     * Each click pulses one digital join. Edit joinsN.js → MUSIC to
+     * change a join number; do NOT hardcode numbers here. */
+    function setupMusic() {
+        if (!JOINS || !JOINS.MUSIC) return;
+        Object.entries(MUSIC_JOIN_PREFIX).forEach(([musicKey, section]) => {
+            const M = JOINS.MUSIC[section];
+            if (!M) return;
+            // Button IDs follow the pattern: music<Part>-<musicKey>-page9
+            // e.g. musicAirPlayBtn-landscape-page9  (PAGE_SUFFIX = '-page9')
+            // _gid('musicAirPlayBtn-landscape') → getElementById('musicAirPlayBtn-landscape-page9')
+            const wire = (idPart, joinName, label) => {
+                const btn  = _gid('music' + idPart + '-' + musicKey);
+                const join = M[joinName];
+                if (!btn || !join) return;
+                btn.addEventListener('click', () => {
+                    pulse(join);
+                    console.log(`[Music:${musicKey}] ${label} → Digital Join ${join}`);
+                });
+            };
+            wire('AirPlayBtn', 'AIRPLAY',   'Air Play');
+            wire('VolUpBtn',   'VOL_UP',    'Vol +');
+            wire('VolDownBtn', 'VOL_DOWN',  'Vol −');
+            wire('MuteBtn',    'MUTE',      'Mute');
+            wire('PowerBtn',   'POWER_OFF', 'Power Off');
+        });
+    }
+
+    // ====================== LIGHTS: AREA ROW FEEDBACK ======================
+    function setupAreaRowFeedback() {
+        if (!hasCrestron()) return;
+        _qsa('.area-btn').forEach(btn => {
+            const oc   = btn.getAttribute('onclick') || '';
+            const m    = oc.match(/tap_page\d+\('([^']+)'\)/);
+            if (!m) return;
+            const join = _resolveJoin_page9(m[1]);
+            if (!join) return;
+            const rowBtns = btn.closest('.area-row-btns');
+            const areaRow = btn.closest('.area-row[data-area]');
+            const areaKey = areaRow ? areaRow.dataset.area : null;
+            const preset  = btn.classList.contains('ab-on')    ? 'on'
+                          : btn.classList.contains('ab-dim')   ? 'dim'
+                          : btn.classList.contains('ab-relax') ? 'relax'
+                          : btn.classList.contains('ab-off')   ? 'off'
+                          : null;
+            subBool(join, (val) => {
+                if (!val) return;
+                if (rowBtns) rowBtns.querySelectorAll('.area-btn').forEach(b => b.classList.remove('ab-active'));
+                btn.classList.add('ab-active');
+                if (areaKey && preset) setAreaVisual(areaKey, preset);
+            });
+        });
+    }
+
+    // ====================== LIGHTS: CHANNEL FEEDBACK ======================
+    function setupChannelFeedback() {
+        if (!hasCrestron()) return;
+        Object.keys(areaState).forEach(areaKey => {
+            const section  = AREA_JOIN_SECTION[areaKey];
+            const J_       = section && JOINS[section];
+            const channels = J_ && J_.CHANNELS;
+            if (!channels) return;
+            const st = areaState[areaKey];
+            if (!st.chLevels) st.chLevels = {};
+            if (!st.chStates) st.chStates = {};
+
+            channels.forEach((ch, i) => {
+                if (ch.ON) {
+                    subBool(ch.ON, (val) => {
+                        const state = val ? 'on' : 'off';
+                        st.chStates[i] = state;
+                        if (!val) {
+                            st.chLevels[i] = 0;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 0);
+                        } else if (!ch.DIM_FB) {
+                            st.chLevels[i] = 100;
+                            if (currentPanelArea === areaKey) updateChRowVisual(i, 100);
+                        }
+                        if (currentPanelArea === areaKey) {
+                            const wrap = _gid('panelChannels');
+                            if (wrap) updateChBtnVisual(wrap, i, state);
+                        }
+                    });
+                }
+                if (ch.DIM_FB) {
+                    subAnalog(ch.DIM_FB, (val) => {
+                        const v = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+                        st.chLevels[i] = v;
+                        if (currentPanelArea === areaKey) updateChRowVisual(i, v);
+                        const state = v > 0 ? 'on' : 'off';
+                        if (st.chStates[i] !== state) {
+                            st.chStates[i] = state;
+                            if (currentPanelArea === areaKey) {
+                                const wrap = _gid('panelChannels');
+                                if (wrap) updateChBtnVisual(wrap, i, state);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    // ====================== FEEDBACK: GLOBAL ======================
+    function setupFeedbackSubscriptions() {
+        if (!hasCrestron()) return;
+        setupLightsFeedback();
+        setupAreaRowFeedback();
+        setupChannelFeedback();
+    }
+
+    function requestCurrentStatus() {
+        // D → J9.SYSTEM.REQUEST_STATUS — ask CP4 to resend all feedback
+        pulse(JOINS.SYSTEM.REQUEST_STATUS);
+    }
+
+    function notifyActivePage() {
+        if (!hasCrestron()) return;
+        // D → J9.SYSTEM.PAGE_ACTIVE — tell CH5 shell page9 is the active page
+        CrComLib.publishEvent('b', JOINS.SYSTEM.PAGE_ACTIVE, true);
+    }
+
+    // ====================== CLOCK ======================
+    // ====================== BOOTSTRAP ======================
+    // ▸▸▸ EDIT-FOR-PAGE-N: change 'page9-import-page' to 'page<N>-import-page'
+    //                      so the shell's loaded-event matches this page's
+    //                      ch5-import-htmlsnippet id (auto-generated by
+    //                      `npm run generate:page`).
+    if (hasCrestron()) {
+        // IMPORTANT: do NOT unsubscribe after the first fire. CH5's
+        // import-snippet republishes `{loaded:true}` every time the user
+        // navigates back to page9, and we need to re-apply the saved
+        // active widget on each return. We keep the subscription alive
+        // and use a one-shot guard so the heavy onInit() (which wires
+        // event listeners, builds AC dials, etc.) only runs once.
+        let initDone = false;
+        CrComLib.subscribeState(
+            'o',
+            'ch5-import-htmlsnippet:page9-import-page',
+            (value) => {
+                if (!value || !value['loaded']) return;
+                if (!initDone) {
+                    onInit();
+                    initDone = true;
+                } else {
+                    // Subsequent returns to page9 — restore the widget
+                    // the user had selected last time.
+                    applyStoredWidget(/*fallbackToHtmlActive*/ false);
                 }
             }
         );

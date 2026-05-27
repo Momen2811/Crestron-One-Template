@@ -1,5 +1,5 @@
 {
-  "projectName": "project-one",
+  "projectName": "aya-hesham-sadek",
   "projectType": "shell-template",
   "version": "0.0.1",
   "faviconPath": "favicon.ico",
@@ -8,14 +8,6 @@
   "useWebXPanel": true,
   "forceDeviceXPanel": false,
   "themes": [
-    {
-      "name": "light-theme",
-      "brandLogo": {
-        "url": "./app/template/assets/img/ch5-logo-light.svg",
-        "alt": "Crestron Logo",
-        "receiveStateUrl": ""
-      }
-    },
     {
       "name": "dark-theme",
       "brandLogo": {
@@ -26,7 +18,12 @@
     }
   ],
   "config": {
-    "controlSystem": {}
+    "controlSystem": {
+
+      "port": 49200,
+      "roomId": "room-01",
+      "ipId": "0x06"
+    }
   },
   "customSignals": {
     "receiveStateTheme": "templateTheme",
@@ -59,15 +56,37 @@
     },
     "pages": [
       {
+        "pageName": "home",
+        "fullPath": "./app/project/components/pages/home/",
+        "fileName": "home.html",
+        "preloadPage": true,
+        "cachePage": true,
+        "standAloneView": false,
+        "navigation": {
+          "sequence": 0,
+          "label": "Home",
+          "isI18nLabel": false,
+          "iconClass": "fas fa-home",
+          "iconUrl": "",
+          "iconPosition": "bottom"
+        },
+        "animation": {
+          "transitionIn": "",
+          "transitionOut": "",
+          "transitionDuration": "1s",
+          "transitionDelay": "0s"
+        }
+      },
+      {
         "pageName": "page1",
         "fullPath": "./app/project/components/pages/page1/",
         "fileName": "page1.html",
-        "preloadPage": true,
-        "cachePage": false,
+        "preloadPage": false,
+        "cachePage": true,
         "standAloneView": false,
         "navigation": {
           "sequence": 1,
-          "label": "Master Bedroom",
+          "label": "Master Room",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -89,7 +108,73 @@
         "standAloneView": false,
         "navigation": {
           "sequence": 2,
-          "label": "First Living",
+          "label": "Living Room",
+          "isI18nLabel": false,
+          "iconClass": "fas fa-file-alt",
+          "iconUrl": "",
+          "iconPosition": "bottom"
+        },
+        "animation": {
+          "transitionIn": "",
+          "transitionOut": "",
+          "transitionDuration": "1s",
+          "transitionDelay": "0s"
+        }
+      },
+      {
+        "pageName": "page6",
+        "fullPath": "./app/project/components/pages/page6/",
+        "fileName": "page6.html",
+        "preloadPage": false,
+        "cachePage": true,
+        "standAloneView": false,
+        "navigation": {
+          "sequence": 3,
+          "label": "Reception",
+          "isI18nLabel": false,
+          "iconClass": "fas fa-file-alt",
+          "iconUrl": "",
+          "iconPosition": "bottom"
+        },
+        "animation": {
+          "transitionIn": "",
+          "transitionOut": "",
+          "transitionDuration": "1s",
+          "transitionDelay": "0s"
+        }
+      },
+      {
+        "pageName": "page8",
+        "fullPath": "./app/project/components/pages/page8/",
+        "fileName": "page8.html",
+        "preloadPage": false,
+        "cachePage": true,
+        "standAloneView": false,
+        "navigation": {
+          "sequence": 4,
+          "label": "Basement",
+          "isI18nLabel": false,
+          "iconClass": "fas fa-file-alt",
+          "iconUrl": "",
+          "iconPosition": "bottom"
+        },
+        "animation": {
+          "transitionIn": "",
+          "transitionOut": "",
+          "transitionDuration": "1s",
+          "transitionDelay": "0s"
+        }
+      },
+      {
+        "pageName": "page9",
+        "fullPath": "./app/project/components/pages/page9/",
+        "fileName": "page9.html",
+        "preloadPage": false,
+        "cachePage": true,
+        "standAloneView": false,
+        "navigation": {
+          "sequence": 5,
+          "label": "All Outdoor",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -107,10 +192,10 @@
         "fullPath": "./app/project/components/pages/page3/",
         "fileName": "page3.html",
         "preloadPage": false,
-        "cachePage": false,
+        "cachePage": true,
         "standAloneView": false,
         "navigation": {
-          "sequence": 3,
+          "sequence": 6,
           "label": "Omar",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
@@ -129,10 +214,10 @@
         "fullPath": "./app/project/components/pages/page4/",
         "fileName": "page4.html",
         "preloadPage": false,
-        "cachePage": false,
+        "cachePage": true,
         "standAloneView": false,
         "navigation": {
-          "sequence": 4,
+          "sequence": 7,
           "label": "Hassan",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
@@ -151,33 +236,11 @@
         "fullPath": "./app/project/components/pages/page5/",
         "fileName": "page5.html",
         "preloadPage": false,
-        "cachePage": false,
+        "cachePage": true,
         "standAloneView": false,
         "navigation": {
-          "sequence": 5,
+          "sequence": 8,
           "label": "Layla",
-          "isI18nLabel": false,
-          "iconClass": "fas fa-file-alt",
-          "iconUrl": "",
-          "iconPosition": "bottom"
-        },
-        "animation": {
-          "transitionIn": "",
-          "transitionOut": "",
-          "transitionDuration": "1s",
-          "transitionDelay": "0s"
-        }
-      },
-      {
-        "pageName": "page6",
-        "fullPath": "./app/project/components/pages/page6/",
-        "fileName": "page6.html",
-        "preloadPage": false,
-        "cachePage": false,
-        "standAloneView": false,
-        "navigation": {
-          "sequence": 6,
-          "label": "Reception",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",
@@ -195,55 +258,11 @@
         "fullPath": "./app/project/components/pages/page7/",
         "fileName": "page7.html",
         "preloadPage": false,
-        "cachePage": false,
-        "standAloneView": false,
-        "navigation": {
-          "sequence": 7,
-          "label": "Basement",
-          "isI18nLabel": false,
-          "iconClass": "fas fa-file-alt",
-          "iconUrl": "",
-          "iconPosition": "bottom"
-        },
-        "animation": {
-          "transitionIn": "",
-          "transitionOut": "",
-          "transitionDuration": "1s",
-          "transitionDelay": "0s"
-        }
-      },
-      {
-        "pageName": "page8",
-        "fullPath": "./app/project/components/pages/page8/",
-        "fileName": "page8.html",
-        "preloadPage": false,
-        "cachePage": false,
-        "standAloneView": false,
-        "navigation": {
-          "sequence": 8,
-          "label": "Kitchen",
-          "isI18nLabel": false,
-          "iconClass": "fas fa-file-alt",
-          "iconUrl": "",
-          "iconPosition": "bottom"
-        },
-        "animation": {
-          "transitionIn": "",
-          "transitionOut": "",
-          "transitionDuration": "1s",
-          "transitionDelay": "0s"
-        }
-      },
-      {
-        "pageName": "page9",
-        "fullPath": "./app/project/components/pages/page9/",
-        "fileName": "page9.html",
-        "preloadPage": false,
-        "cachePage": false,
+        "cachePage": true,
         "standAloneView": false,
         "navigation": {
           "sequence": 9,
-          "label": "All Outdoor",
+          "label": "Kitchen",
           "isI18nLabel": false,
           "iconClass": "fas fa-file-alt",
           "iconUrl": "",

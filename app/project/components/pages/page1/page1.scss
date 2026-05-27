@@ -1,3 +1,65 @@
+/* ============================================================================
+ * page1.scss  —  Smart Home Control  —  PAGE 1 styles
+ * ============================================================================
+ *
+ *  ┌───────────────────────────────────────────────────────────────────────┐
+ *  │  SECTION INDEX  (use Ctrl+F on a header to jump)                      │
+ *  ├───────────────────────────────────────────────────────────────────────┤
+ *  │   ~L51  RESET + HTML/BODY DARK LOCK                                   │
+ *  │   ~L84  .page-wrap   — design-token CSS variables                     │
+ *  │  ~L124  .bg-mesh     — ambient aurora background                      │
+ *  │  ~L152  .statusbar / .battery-indicator  (LEGACY — modernized topbar  │
+ *  │                                            in MODERNIZATION LAYER)    │
+ *  │  ~L187  .greeting   (LEGACY — modernized .greeting--modern below)     │
+ *  │  ~L215  .area-shutdown-btn + .ash-* dialog                            │
+ *  │  ~L355  .weather-card                                                 │
+ *  │  ~L458  .tab-nav  +  ~L502 .dcard device cards                        │
+ *  │  ~L565  .dimmer-card  /  ~L616 .quick-grid  /  ~L640 .status-row      │
+ *  │  ~L666  sub-tab-nav   /  ~L689 TV controls  /  ~L944 .dpad-*          │
+ *  │ ~L1018  .keypad      /  ~L1104 .favorites-grid                        │
+ *  │ ~L1175  .lights-global-bar   …area cards / preset popup               │
+ *  │ ~L2579  .home-ctrl-bar + .hcb-btn   (top-of-page launch bar)          │
+ *  │ ~L2812  .hov-mode-btn  (House Modes overlay)                          │
+ *  │ ~L2942  .hov-sys-chip  /  ~L2987 .hov-on-btn / .hov-off-btn           │
+ *  │ ~L3030  .hov-sd-row   (Shutdown overlay)                              │
+ *  │ ~L3300  .music-* controls                                             │
+ *  │ ~L3336  ▶▶ MODERNIZATION LAYER — additive, see comment block at end   │
+ *  │            • per-room --room-rgb tints                                │
+ *  │            • .svg-ico inline SVG wrapper                              │
+ *  │            • .topbar / .room-tag / .conn   (replaces fake status bar) │
+ *  │            • .seg-pair  (segmented ON/OFF wrapper, no behaviour fork) │
+ *  │            • universal tap-feedback + 44px touch-target floor         │
+ *  │            • .greeting--modern                                        │
+ *  └───────────────────────────────────────────────────────────────────────┘
+ *
+ *  HOW TO COPY THIS FILE FOR ANOTHER PAGE
+ *  ---------------------------------------------------------------------------
+ *  Two strategies — pick ONE.
+ *
+ *  STRATEGY A  (recommended) — share ONE stylesheet across all pages.
+ *      In page<N>.html link THIS same file:
+ *          <link rel="stylesheet" href="page1.scss">
+ *      Pros:  one place to fix bugs / restyle.
+ *      Cons:  ALL pages look the same.  (Per-room tints in the
+ *             MODERNIZATION LAYER fix this without forking the file.)
+ *
+ *  STRATEGY B  — per-page styles (different look per page).
+ *      1. Copy this file as page<N>.scss.
+ *      2. Wrap the rules that should ONLY apply to that page inside
+ *         #page<N>-page { … }.  Rules already inside #page1-page in this
+ *         file would need to be re-scoped to #page<N>-page in the copy.
+ *      3. Leave the GLOBAL rules (html, body, *::before, body-portaled
+ *         popup .area-panel, .area-panel-overlay) at the top level — they
+ *         must stay un-scoped or popups break.
+ *      4. In page<N>.html link the new file:
+ *             <link rel="stylesheet" href="page<N>.scss">
+ *
+ *  ▸▸▸ NOTE: there are NO Crestron join references in this file, so the
+ *      J1 → J<N> rename you do in joins<N>.js / page<N>.js does NOT apply
+ *      here.  This file is pure styling.
+ * ============================================================================
+ */
+
 /* page1.css — Smart Home Control
  * v4 changes:
  *   - Preset buttons are now CATALOG-DRIVEN. The popup can hold 4–13+
@@ -23,56 +85,47 @@
   padding: 0;
 }
 
-/* Force dark regardless of system preference */
+/* Force dark regardless of system preference - HA glassmorphism */
 html {
-  background: #0d1117 !important;
+  background: var(--bg) !important;
   color-scheme: dark;
   min-height: 100% !important;
 }
 body {
-  background: #0d1117 !important;
-  color: #e4e9f7 !important;
+  background: var(--bg) !important;
+  color: var(--text) !important;
   font-family: 'Sora', sans-serif;
   min-height: 100% !important;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+
 }
 
 /* Nuclear option: force dark on every ancestor that might be injected by CH5 shell */
 html, body, #cr-com-lib-host, .details-container, section, div {
   background-color: transparent;
-  width: 100%;
+  width: 100%;  /* prevent injected containers from stretching full-bleed and breaking the layout */
+
 }
 html, body {
-  background-color: #0d1117 !important;
+  background-color: var(--bg) !important;
 }
 
 
-/* CSS custom properties */
+/* CSS custom properties — Home Assistant glassmorphism: dark + purple/teal */
 .page-wrap {
-  --bg:          #0d1117;
-  --bg2:         #161b27;
-  --card:        #1a2035;
-  --card2:       #202840;
-  --border:      rgba(255,255,255,0.09);
-  --border-hi:   rgba(255,255,255,0.18);
-  --accent:      #4f8ef7;
-  --accent2:     #6c63ff;
-  --accent-glow: rgba(79,142,247,0.32);
-  --yellow:      #fbbf24;
-  --yellow-glow: rgba(251,191,36,0.28);
-  --green:       #22d3a5;
-  --red:         #f96b6b;
-  --muted:       rgba(255,255,255,0.38);
-  --text:        #e4e9f7;
-  --text2:       #8fa3c8;
-  --r:           18px;
-  --r-sm:        12px;
+  /* Colour tokens (--bg, --card, --accent, --text, …) now live in
+     _theme-additions.scss inside :root / [data-theme="…"] blocks so the
+     three themes (blue / dark / light) can swap them at runtime.
+     Only non-colour layout tokens stay page-local here. */
+  --glass-blur:  18px;
+  --r:           20px;
+  --r-sm:        14px;
 
   position: relative;
   z-index: 1;
   max-width: 100%;
-  margin: 0 ;
+  margin: 0 auto;
   padding: 0 clamp(16px, 4vw, 40px) clamp(32px, 5vh, 56px);
   padding-left: max(clamp(16px, 4vw, 40px), env(safe-area-inset-left));
   padding-right: max(clamp(16px, 4vw, 40px), env(safe-area-inset-right));
@@ -82,16 +135,17 @@ html, body {
   width: 100%;
 }
 
-/* Ambient mesh */
+/* Ambient mesh — purple/teal aurora for Home Assistant glassmorphism feel */
 .bg-mesh {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 580px 380px at 5% 0%,   rgba(79,142,247,0.14) 0%, transparent 65%),
-    radial-gradient(ellipse 480px 380px at 95% 100%, rgba(108,99,255,0.13) 0%, transparent 65%),
-    #0d1117;
+    radial-gradient(ellipse 640px 420px at 8% 0%,   rgba(var(--t-accent2-rgb), 0.18) 0%, transparent 62%),
+    radial-gradient(ellipse 540px 420px at 95% 100%, rgba(var(--t-accent-rgb), 0.16) 0%, transparent 62%),
+    radial-gradient(ellipse 380px 280px at 50% 45%, rgba(99, 102, 241, 0.10) 0%, transparent 70%),
+    var(--bg);
   width: 100vw;
   height: 100vh;
   height: 100dvh;
@@ -102,80 +156,329 @@ body::after {
   position: absolute;
   top: 0; left: 0; right: 0;
   min-height: 100%;
-  background: #0d1117;
+  background: var(--bg);
   z-index: -2;
 }
 
 ::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(var(--t-overlay-rgb),0.1); border-radius: 4px; }
 
 /* Status bar */
 .statusbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 0 4px;
-  padding-top: max(16px, env(safe-area-inset-top));
-  font-size: 13px;
-  color: rgba(255,255,255,0.4);
+  padding: 10px 0 2px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  font-size: 12px;
+  color: rgba(var(--t-overlay-rgb),0.4);
 }
 .statusbar .clk {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  color: #e4e9f7;
+  color: var(--text);
 }
-.statusbar .icons { display: flex; gap: 8px; font-size: 15px; }
+.statusbar .icons { display: flex; gap: 10px; align-items: center; font-size: 14px; }
 
-/* Greeting */
-.greeting { display: flex; align-items: center; gap: 12px; padding: 20px 0 24px; }
-.avatar {
-  width: 46px; height: 46px; border-radius: 50%;
-  background: linear-gradient(135deg, #4f8ef7, #6c63ff);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 18px; color: #fff; flex-shrink: 0;
-  box-shadow: 0 0 0 3px rgba(79,142,247,0.25), 0 4px 16px rgba(79,142,247,0.3);
+/* Battery indicator with live % */
+.battery-indicator {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: 10px;
+  background: rgba(var(--t-overlay-rgb),0.04);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.06);
 }
-.gname { font-size: clamp(15px, 2vw, 18px); font-weight: 600; color: #e4e9f7; }
-.gsub  { font-size: 12px; color: #8fa3c8; margin-top: 2px; }
-.bell {
-  margin-left: auto; width: 40px; height: 40px; border-radius: 50%;
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
+.battery-indicator .battery-icon { font-size: 12px; line-height: 1; }
+.battery-indicator .battery-pct {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; font-weight: 600; color: var(--text);
+  letter-spacing: 0.2px;
+}
+.battery-indicator.low   .battery-pct { color: #ffb36b; }
+.battery-indicator.crit  .battery-pct { color: #ff6b6b; }
+.battery-indicator.charging .battery-pct { color: #7ee09e; }
+
+/* Greeting — compact */
+.greeting {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0 14px;
+}
+.avatar {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
   display: flex; align-items: center; justify-content: center;
-  font-size: 17px; cursor: pointer; transition: border-color 0.2s;
+  font-weight: 700; font-size: 15px; color: var(--on-accent); flex-shrink: 0;
+  box-shadow: 0 0 0 2px rgba(var(--t-accent-rgb),0.22), 0 3px 12px rgba(var(--t-accent-rgb),0.28);
+}
+.greeting-text { display: flex; flex-direction: column; min-width: 0; }
+.gname { font-size: clamp(13px, 1.7vw, 15px); font-weight: 600; color: var(--text); line-height: 1.2; }
+.gsub  { font-size: 11px; color: var(--text2); margin-top: 1px; line-height: 1.2; }
+.bell {
+  margin-left: auto; width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; cursor: pointer; transition: border-color 0.2s;
   flex-shrink: 0;
 }
-.bell:hover { border-color: rgba(255,255,255,0.18); }
+.bell:hover { border-color: rgba(var(--t-overlay-rgb),0.18); }
 
-/* Energy card */
-.energy-card {
-  background: linear-gradient(135deg, #1c3263 0%, #1f2f5e 50%, #192858 100%);
-  border: 1px solid rgba(79,142,247,0.28);
-  border-radius: 18px; padding: 22px 22px 20px;
-  margin-bottom: 20px; position: relative; overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+/* ════════════════════════════════════════════════════════════════════
+   AREA SHUTDOWN BUTTON — drop-in replacement for the old 🔔 bell.
+   Same 34×34 round footprint so the greeting row layout doesn't shift.
+   Red border + glow makes it read as "destructive action".
+   ════════════════════════════════════════════════════════════════════ */
+.area-shutdown-btn {
+  margin-left: auto;
+  width: 45px; height: 45px;
+  border-radius: 50%;
+  background: rgba(249,107,107,0.10);
+  border: 1px solid rgba(249,107,107,0.45);
+  color: #f96b6b;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  flex-shrink: 0;
+  padding: 0;
+  outline: none;
+  touch-action: manipulation;
+  box-shadow: 0 2px 8px rgba(249,107,107,0.18);
 }
-.energy-card::before {
-  content: ''; position: absolute; top: -70px; right: -60px;
-  width: 220px; height: 220px; border-radius: 50%;
-  background: rgba(79,142,247,0.11);
+.area-shutdown-btn svg { width: 16px; height: 16px; display: block; }
+.area-shutdown-btn:hover {
+  background: rgba(249,107,107,0.20);
+  border-color: rgba(249,107,107,0.75);
+  box-shadow: 0 4px 14px rgba(249,107,107,0.32);
 }
-.energy-label {
-  font-size: 11px; font-weight: 600; letter-spacing: 1.2px;
-  text-transform: uppercase; color: rgba(255,255,255,0.45); margin-bottom: 8px;
+.area-shutdown-btn:active { transform: scale(0.92); }
+.area-shutdown-btn:focus-visible {
+  box-shadow: 0 0 0 2px rgba(249,107,107,0.55), 0 4px 14px rgba(249,107,107,0.32);
 }
-.energy-val-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 18px; }
-.energy-value { font-size: clamp(34px, 5vw, 48px); font-weight: 700; color: #fff; line-height: 1; }
-.energy-unit  { font-size: 16px; color: rgba(255,255,255,0.4); }
-.energy-chips { display: flex; gap: 10px; position: relative; z-index: 1; flex-wrap: wrap; }
-.echip {
-  display: flex; align-items: center; gap: 8px;
-  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 28px; padding: 8px 14px;
+
+/* ════════════════════════════════════════════════════════════════════
+   AREA SHUTDOWN CONFIRM DIALOG
+   Backdrop + card, both portaled to <body> by JS so position:fixed
+   works against the viewport even though the source markup lives
+   inside a <ch5-import-htmlsnippet>.
+   ════════════════════════════════════════════════════════════════════ */
+.ash-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0);
+  z-index: 220;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s, background 0.22s, visibility 0s linear 0.22s;
 }
-.echip .eico { font-size: 16px; }
-.echip .ev   { font-size: 13px; font-weight: 600; color: #fff; }
-.echip .el   { font-size: 10px; color: rgba(255,255,255,0.38); margin-top: 1px; }
+.ash-overlay.open {
+  visibility: visible;
+  opacity: 1;
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  pointer-events: all;
+  transition: opacity 0.22s, background 0.22s, visibility 0s;
+}
+
+.ash-dialog {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) scale(0.94);
+  z-index: 221;
+  width: min(360px, calc(100vw - 40px));
+  background: rgba(var(--t-card2-rgb), 0.62); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(249,107,107,0.32);
+  border-radius: 18px;
+  padding: 22px 22px 18px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.55), 0 4px 24px rgba(249,107,107,0.18);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s, transform 0.22s, visibility 0s linear 0.22s;
+  text-align: center;
+  font-family: 'Sora', sans-serif;
+}
+.ash-dialog.open {
+  visibility: visible;
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  pointer-events: all;
+  transition: opacity 0.22s, transform 0.22s, visibility 0s;
+}
+.ash-icon {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: rgba(249,107,107,0.14);
+  border: 1.5px solid rgba(249,107,107,0.45);
+  color: #f96b6b;
+  font-size: 28px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 14px;
+  font-family: 'JetBrains Mono', monospace;
+  box-shadow: 0 0 24px rgba(249,107,107,0.22);
+}
+.ash-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.2px;
+  margin-bottom: 6px;
+}
+.ash-msg {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.4;
+  margin-bottom: 18px;
+}
+.ash-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ash-yes-row {
+  display: flex;
+  gap: 10px;
+}
+.ash-btn {
+  flex: 1;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  transition: all 0.18s;
+  touch-action: manipulation;
+}
+.ash-btn-no {
+  background: rgba(var(--t-overlay-rgb),0.05);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.14);
+  color: #c8d4ec;
+}
+.ash-btn-no:hover  { background: rgba(var(--t-overlay-rgb),0.10); border-color: rgba(var(--t-overlay-rgb),0.24); color: var(--text); }
+.ash-btn-no:active { transform: scale(0.96); }
+.ash-btn-yes {
+  background: rgba(249,107,107,0.18);
+  border: 1px solid rgba(249,107,107,0.55);
+  color: #ffb8b8;
+}
+.ash-btn-yes:hover  { background: rgba(249,107,107,0.30); border-color: rgba(249,107,107,0.85); color: var(--text); box-shadow: 0 4px 18px rgba(249,107,107,0.32); }
+.ash-btn-yes:active { transform: scale(0.96); }
+.ash-btn-yes-shutter {
+  background: rgba(249,107,107,0.18);
+  border: 1px solid rgba(249,107,107,0.55);
+  color: #ffb8b8;
+}
+.ash-btn-yes-shutter:hover  { background: rgba(255,160,50,0.28); border-color: rgba(255,160,50,0.85); color: var(--text); box-shadow: 0 4px 18px rgba(255,160,50,0.28); }
+.ash-btn-yes-shutter:active { transform: scale(0.96); }
+
+/* ══════════════════════════════════════════════════════════════════
+   WEATHER CARD — single-row compact layout
+     [☀️]  [🌡️ 24°C Temp]  [💧 55% Humidity]  [💨 12 km/h Wind]  ···  [Cairo / Mon Apr 22]
+   Icon + 3 stat chips + location all share one horizontal flex row
+   so the card height stays short.
+   ══════════════════════════════════════════════════════════════════ */
+.weather-card {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent2-rgb),0.22) 0%, rgba(var(--t-accent-rgb),0.18) 50%, rgba(99,102,241,0.20) 100%),
+    rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.28);
+  border-radius: 18px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  position: relative; overflow: hidden;
+  box-shadow:
+    0 8px 28px rgba(0,0,0,0.42),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.08) inset;
+  animation: fadeUp 0.35s ease both;
+}
+.weather-card::before {
+  content: ''; position: absolute; top: -55px; right: -55px;
+  width: 160px; height: 160px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(251,191,36,0.22), rgba(251,191,36,0) 70%);
+  pointer-events: none;
+}
+.weather-card::after {
+  content: ''; position: absolute; bottom: -45px; left: -40px;
+  width: 130px; height: 130px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(var(--t-accent-rgb),0.14), rgba(var(--t-accent-rgb),0) 70%);
+  pointer-events: none;
+}
+
+/* Row: icon (left) | chips group (center) | location (right)
+   Compact single-row layout — same short height as before, but
+   justify-content: space-between spreads the 3 sections across the card
+   so nothing feels crammed to one edge. */
+.weather-row {
+  position: relative; z-index: 1;
+  display: flex; align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;            /* keep everything on ONE row */
+  width: 100%;
+}
+
+.weather-icon {
+  font-size: 32px; line-height: 1;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 3px 10px rgba(251,191,36,0.38));
+}
+
+/* Chip group sits in the middle, takes the flexible space and centers
+   its chips inside that space. */
+.wstats-group {
+  display: flex; align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* ── Inline stat chips ─────────────────────────────────────────── */
+.wstat {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: rgba(var(--t-overlay-rgb),0.06);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  border-radius: 10px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: background 0.2s, border-color 0.2s;
+}
+.wstat:hover { background: rgba(var(--t-overlay-rgb),0.09); border-color: rgba(var(--t-overlay-rgb),0.16); }
+.wstat-ico { font-size: 14px; line-height: 1; }
+.wstat-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; font-weight: 700; color: var(--text); line-height: 1;
+}
+.wstat-unit { color: rgba(var(--t-overlay-rgb),0.60); font-weight: 500; font-size: 11px; margin-left: 1px; }
+.wstat-lbl {
+  font-size: 10px; color: rgba(var(--t-overlay-rgb),0.55);
+  letter-spacing: 0.4px; margin-left: 3px;
+  text-transform: uppercase; font-weight: 600;
+}
+
+/* ── Location (right side) ────────────────────────────────────── */
+.weather-loc { text-align: right; flex: 0 0 auto; }
+.weather-loc-city { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.1; }
+.weather-loc-date {
+  font-size: 10px; color: rgba(var(--t-overlay-rgb),0.55);
+  margin-top: 3px; letter-spacing: 0.3px;
+}
+
+/* Narrower screens: drop chip labels to save width */
+@media (max-width: 900px) {
+  .wstat-lbl { display: none; }
+}
+/* Small phones: allow wrap so chips drop under icon+location instead of clipping */
+@media (max-width: 620px) {
+  .weather-row  { flex-wrap: wrap; }
+  .wstats-group { flex: 1 1 100%; order: 3; justify-content: flex-start; }
+  .weather-loc  { order: 2; }
+}
 
 /* Tab nav */
 .tab-nav {
@@ -191,27 +494,27 @@ body::after {
   min-width: 110px;
   padding: 12px 14px;
   border-radius: 28px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: #1a2035; color: #8fa3c8;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); color: var(--text2);
   font-family: 'Sora', sans-serif; font-size: 13px; font-weight: 500;
   cursor: pointer; transition: all 0.22s; text-align: center;
   white-space: nowrap;
   min-height: 44px;
 }
-.tab-btn:hover { border-color: rgba(255,255,255,0.18); color: #e4e9f7; }
+.tab-btn:hover { border-color: rgba(var(--t-overlay-rgb),0.18); color: var(--text); }
 .tab-btn.active {
-  background: linear-gradient(135deg, #4f8ef7, #6c63ff);
-  border-color: transparent; color: #fff; font-weight: 600;
-  box-shadow: 0 4px 20px rgba(79,142,247,0.32);
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-color: transparent; color: var(--on-accent); font-weight: 600;
+  box-shadow: 0 4px 20px rgba(var(--t-accent-rgb),0.32);
 }
 
 /* Section header */
 .sec-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 10px; flex-wrap: wrap; }
-.sec-title { font-size: 15px; font-weight: 600; color: #e4e9f7; }
+.sec-title { font-size: 15px; font-weight: 600; color: var(--text); }
 .sec-badge {
   font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
-  background: rgba(79,142,247,0.15); color: #4f8ef7;
-  border: 1px solid rgba(79,142,247,0.25);
+  background: rgba(var(--t-accent-rgb),0.15); color: var(--accent);
+  border: 1px solid rgba(var(--t-accent-rgb),0.25);
   flex-shrink: 0;
 }
 
@@ -223,71 +526,83 @@ body::after {
   margin-bottom: 20px;
 }
 .dcard {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(var(--t-overlay-rgb),0.09);
   border-radius: 18px; padding: 18px 16px 16px;
   cursor: pointer; transition: all 0.22s; position: relative; overflow: hidden;
 }
-.dcard:hover { border-color: rgba(255,255,255,0.18); transform: translateY(-2px); }
+.dcard:hover { border-color: rgba(var(--t-overlay-rgb),0.18); transform: translateY(-2px); }
 .dcard.d-active {
-  background: linear-gradient(145deg, #1a3060, #1c2e5a);
-  border-color: rgba(79,142,247,0.42);
-  box-shadow: 0 4px 24px rgba(79,142,247,0.2);
+  background:
+    linear-gradient(145deg, rgba(var(--t-accent-rgb), 0.18), rgba(var(--t-accent2-rgb), 0.16)),
+    rgba(var(--t-card-rgb), 0.62);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  box-shadow:
+    0 6px 28px rgba(var(--t-accent-rgb), 0.28),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.10) inset;
 }
 .dcard.d-yellow {
-  background: linear-gradient(145deg, #28200e, #231c09);
-  border-color: rgba(251,191,36,0.4);
-  box-shadow: 0 4px 24px rgba(251,191,36,0.14);
+  background:
+    linear-gradient(145deg, rgba(251, 191, 36, 0.22), rgba(var(--t-accent2-rgb), 0.10)),
+    rgba(40, 32, 14, 0.62);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border-color: rgba(251, 191, 36, 0.5);
+  box-shadow:
+    0 6px 24px rgba(251, 191, 36, 0.22),
+    0 0 0 1px rgba(251, 191, 36, 0.10) inset;
 }
 .dico-wrap {
   width: 44px; height: 44px; border-radius: 13px;
-  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(var(--t-overlay-rgb),0.07); border: 1px solid rgba(var(--t-overlay-rgb),0.08);
   display: flex; align-items: center; justify-content: center;
   font-size: 22px; margin-bottom: 14px; transition: all 0.22s;
 }
-.dcard.d-active .dico-wrap { background: rgba(79,142,247,0.22); border-color: rgba(79,142,247,0.32); }
+.dcard.d-active .dico-wrap { background: rgba(var(--t-accent-rgb),0.22); border-color: rgba(var(--t-accent-rgb),0.32); }
 .dcard.d-yellow .dico-wrap { background: rgba(251,191,36,0.2); border-color: rgba(251,191,36,0.32); }
-.dname { font-size: clamp(13px, 1.6vw, 16px); font-weight: 600; color: #e4e9f7; margin-bottom: 3px; }
-.dmeta { font-size: clamp(11px, 1.2vw, 13px); color: #8fa3c8; }
+.dname { font-size: clamp(13px, 1.6vw, 16px); font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.dmeta { font-size: clamp(11px, 1.2vw, 13px); color: var(--text2); }
 .dtog-row { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
-.dtog-lbl { font-size: 11px; font-weight: 500; color: #8fa3c8; }
+.dtog-lbl { font-size: 11px; font-weight: 500; color: var(--text2); }
 
 /* Toggle switch */
 .tog { position: relative; width: 38px; height: 22px; display: inline-block; flex-shrink: 0; }
 .tog input { opacity: 0; width: 0; height: 0; }
 .ttrack {
   position: absolute; inset: 0; border-radius: 11px;
-  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(var(--t-overlay-rgb),0.1); border: 1px solid rgba(var(--t-overlay-rgb),0.1);
   cursor: pointer; transition: all 0.25s;
 }
 .ttrack::before {
   content: ''; position: absolute;
   width: 16px; height: 16px; left: 2px; top: 2px;
-  border-radius: 50%; background: rgba(255,255,255,0.45);
+  border-radius: 50%; background: rgba(var(--t-overlay-rgb),0.45);
   transition: transform 0.25s, background 0.25s;
   box-shadow: 0 1px 4px rgba(0,0,0,0.3);
 }
 .tog input:checked + .ttrack {
-  background: #4f8ef7; border-color: transparent;
-  box-shadow: 0 0 10px rgba(79,142,247,0.35);
+  background: var(--accent); border-color: transparent;
+  box-shadow: 0 0 10px rgba(var(--t-accent-rgb),0.35);
 }
 .tog input:checked + .ttrack::before { transform: translateX(16px); background: #fff; }
 
 /* Dimmer card */
 .dimmer-card {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(var(--t-overlay-rgb),0.09);
   border-radius: 18px; padding: 22px 20px; margin-bottom: 20px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.25);
 }
 .dimmer-top { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
 .dico { font-size: 22px; }
-.dtitle { font-size: 15px; font-weight: 600; color: #e4e9f7; }
+.dtitle { font-size: 15px; font-weight: 600; color: var(--text); }
 .dpct-wrap { margin-left: auto; text-align: right; }
 .dpct {
   font-size: clamp(24px, 4vw, 30px);
   font-weight: 700; line-height: 1;
   font-family: 'JetBrains Mono', monospace; color: #fbbf24;
 }
-.djoin { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 2px; }
+.djoin { font-size: 10px; color: rgba(var(--t-overlay-rgb),0.35); margin-top: 2px; }
 
 /* Arc dial */
 .dial-wrap { display: flex; justify-content: center; margin-bottom: 22px; }
@@ -297,7 +612,7 @@ body::after {
 .dim-range {
   -webkit-appearance: none; appearance: none;
   width: 100%; height: 7px; border-radius: 4px;
-  background: rgba(255,255,255,0.1); outline: none;
+  background: rgba(var(--t-overlay-rgb),0.1); outline: none;
   cursor: pointer; margin-bottom: 8px;
   touch-action: manipulation;
 }
@@ -318,10 +633,10 @@ body::after {
 .dim-range::-webkit-slider-thumb:active { transform: scale(1.18); }
 .range-lbx {
   display: flex; justify-content: space-between;
-  font-size: 10px; color: rgba(255,255,255,0.35);
+  font-size: 10px; color: rgba(var(--t-overlay-rgb),0.35);
   font-family: 'JetBrains Mono', monospace;
 }
-.dim-hint { font-size: 10px; color: rgba(255,255,255,0.28); text-align: center; margin-top: 8px; }
+.dim-hint { font-size: 10px; color: rgba(var(--t-overlay-rgb),0.28); text-align: center; margin-top: 8px; }
 
 /* Quick buttons */
 .quick-grid {
@@ -334,17 +649,17 @@ body::after {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 16px 8px 14px; border-radius: 12px;
   min-height: 72px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: #1a2035; color: #8fa3c8;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); color: var(--text2);
   font-family: 'Sora', sans-serif; font-size: clamp(12px, 1.4vw, 15px); font-weight: 500;
   cursor: pointer; transition: all 0.2s;
   touch-action: manipulation;
 }
 .qbtn .qi { font-size: clamp(20px, 2.5vw, 26px); }
 .qbtn:hover { transform: translateY(-2px); }
-.qbtn.q-on:hover  { background: rgba(34,211,165,0.12); border-color: rgba(34,211,165,0.38); color: #22d3a5; }
+.qbtn.q-on:hover  { background: rgba(var(--t-accent-rgb),0.12); border-color: rgba(var(--t-accent-rgb),0.38); color: var(--accent); }
 .qbtn.q-off:hover { background: rgba(249,107,107,0.12); border-color: rgba(249,107,107,0.38); color: #f96b6b; }
-.qbtn.q-dim:hover { background: rgba(79,142,247,0.12); border-color: rgba(79,142,247,0.38); color: #4f8ef7; }
+.qbtn.q-dim:hover { background: rgba(var(--t-accent-rgb),0.12); border-color: rgba(var(--t-accent-rgb),0.38); color: var(--accent); }
 .qbtn:active { transform: scale(0.96); }
 
 /* Status pill */
@@ -358,14 +673,14 @@ body::after {
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.28} }
 .sp-off { background: rgba(249,107,107,0.1); border-color: rgba(249,107,107,0.25); color: #f96b6b; }
 .sp-off .sdot { background: #f96b6b; }
-.sp-on  { background: rgba(34,211,165,0.1); border-color: rgba(34,211,165,0.25); color: #22d3a5; }
-.sp-on  .sdot { background: #22d3a5; }
-.sp-dim { background: rgba(79,142,247,0.1); border-color: rgba(79,142,247,0.25); color: #4f8ef7; }
-.sp-dim .sdot { background: #4f8ef7; }
+.sp-on  { background: rgba(var(--t-accent-rgb),0.1); border-color: rgba(var(--t-accent-rgb),0.25); color: var(--accent); }
+.sp-on  .sdot { background: var(--accent); }
+.sp-dim { background: rgba(var(--t-accent-rgb),0.1); border-color: rgba(var(--t-accent-rgb),0.25); color: var(--accent); }
+.sp-dim .sdot { background: var(--accent); }
 
 /* Animations */
 @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
-.energy-card { animation: fadeUp 0.35s ease both; }
+/* Weather card animation declared inline on .weather-card */
 .tab-nav     { animation: fadeUp 0.35s 0.06s ease both; }
 
 /* ====================== WIDGET SYSTEM ====================== */
@@ -377,145 +692,572 @@ body::after {
 .sub-tab-nav { display: flex; gap: 8px; margin: 24px 0 20px; justify-content: center; flex-wrap: wrap; }
 .sub-tab-btn {
   padding: 10px 24px; border-radius: 30px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: #1a2035; color: #8fa3c8;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); color: var(--text2);
   font-size: 14px; font-weight: 500;
   cursor: pointer; transition: all 0.25s ease;
   touch-action: manipulation;
   min-height: 44px;
 }
 .sub-tab-btn.active {
-  background: linear-gradient(135deg, #4f8ef7, #6c63ff);
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
   color: white; border-color: transparent;
-  box-shadow: 0 4px 15px rgba(79,142,247,0.3);
+  box-shadow: 0 4px 15px rgba(var(--t-accent-rgb),0.3);
 }
 .tv-subwidget { display: none; }
-.tv-subwidget.active { display: block; }
+.tv-subwidget.active { display: block; animation: fadeUp 0.35s ease both; }
 
-/* Power & Source Buttons */
-.tv-power-btn, .tv-source-btn {
-  padding: 13px 28px; font-size: 15px; font-weight: 600;
-  border: none; border-radius: 50px; cursor: pointer;
-  transition: all 0.25s ease; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-  touch-action: manipulation;
-  min-height: 48px;
+/* ════════════════════════════════════════════════════════════════════
+   TV WIDGET — Home Assistant glassmorphism remote
+   Wrap the whole sub-widget in a soft glass remote panel that ties the
+   power buttons, media grid, d-pad and keypad into a single device.
+   ════════════════════════════════════════════════════════════════════ */
+#tv-controls-page1,
+[id^="tv-controls-page"] {
+  position: relative;
+  padding: 22px 18px 24px;
+  border-radius: 26px;
+  background:
+    radial-gradient(ellipse 480px 320px at 50% -10%, rgba(var(--t-accent2-rgb), 0.16), transparent 70%),
+    radial-gradient(ellipse 420px 300px at 50% 110%, rgba(var(--t-accent-rgb), 0.14), transparent 70%),
+    rgba(var(--t-card2-rgb), 0.55);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.18);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.06) inset;
+  overflow: hidden;
 }
-.tv-power-btn  { background: #ef4444; color: white; }
-.tv-source-btn { background: #4f8ef7; color: white; }
-.tv-power-btn:hover  { background: #f87171; }
-.tv-source-btn:hover { background: #6c63ff; }
+
+/* Subtle scan-line glimmer along the top edge of the remote panel */
+#tv-controls-page1::before,
+[id^="tv-controls-page"]::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 8%; right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg,
+              transparent 0%,
+              rgba(var(--t-accent2-rgb), 0.55) 35%,
+              rgba(var(--t-accent-rgb), 0.55) 65%,
+              transparent 100%);
+  pointer-events: none;
+}
+
+/* Power & Source Buttons — glass capsules with colored glow */
+.tv-power-btn,
+.tv-source-btn {
+  position: relative;
+  padding: 14px 30px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 50px;
+  cursor: pointer;
+  transition: transform 0.18s, box-shadow 0.25s, background 0.25s, border-color 0.25s;
+  touch-action: manipulation;
+  min-height: 50px;
+  font-family: 'Sora', sans-serif;
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.tv-power-btn  {
+  background:
+    linear-gradient(135deg, rgba(248, 113, 113, 0.34), rgba(239, 68, 68, 0.18)),
+    rgba(var(--t-card-rgb), 0.55);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+  box-shadow:
+    0 6px 22px rgba(248, 113, 113, 0.32),
+    0 0 0 1px rgba(248, 113, 113, 0.10) inset;
+}
+.tv-power-btn:hover {
+  background:
+    linear-gradient(135deg, rgba(248, 113, 113, 0.50), rgba(239, 68, 68, 0.30)),
+    rgba(var(--t-card-rgb), 0.62);
+  border-color: rgba(248, 113, 113, 0.78);
+  box-shadow:
+    0 10px 32px rgba(248, 113, 113, 0.55),
+    0 0 0 2px rgba(248, 113, 113, 0.18) inset;
+  color: var(--text);
+  transform: translateY(-2px);
+}
+.tv-power-btn:active { transform: scale(0.96); }
+.tv-power-btn.tv-power-on {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.40), rgba(22, 163, 121, 0.22)),
+    rgba(var(--t-card-rgb), 0.55);
+  border-color: rgba(var(--t-accent-rgb), 0.75);
+  color: var(--accent);
+  box-shadow: 0 6px 22px rgba(var(--t-accent-rgb), 0.35), 0 0 0 1px rgba(var(--t-accent-rgb), 0.18) inset;
+}
+
+
 
 #tvBack, #tvHome, #tvMenu, #tvChList, #tvReturn { font-size: 16px; }
 
 /* TV REMOTE LAYOUT */
-.tv-header-controls { display: flex; gap: 12px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap; }
+.tv-header-controls {
+  display: flex; gap: 14px; justify-content: center;
+  margin-bottom: 24px; flex-wrap: wrap;
+}
 
+/* ════════════════════════════════════════════════════════════════════
+   Media controls grid — color-coded glass tiles
+   Vol+ / Vol- / Mute / CH+ / CH-
+   Mute spans both columns. Each button has an icon-emoji, label,
+   and a tinted ring on hover that signals its function.
+   ════════════════════════════════════════════════════════════════════ */
 .media-controls-grid {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
-  margin: 10px auto 28px auto; max-width: 420px; width: 100%;
-}
-.media-btn {
-  background: #1f2a44; border: 1px solid rgba(255,255,255,0.08);
-  color: #e4e9f7; padding: 12px 8px; border-radius: 12px;
-  font-size: 13.5px; font-weight: 500; text-align: center;
-  cursor: pointer; transition: all 0.25s ease; min-height: 52px;
-  display: flex; align-items: center; justify-content: center;
-  touch-action: manipulation;
-}
-#tvMuteBtn { grid-column: span 2; }
-.media-btn:hover { background: #334155; transform: translateY(-2px); }
-
-/* D-Pad - Responsive */
-.dpad-container {
   display: grid;
-  --dpad-size: clamp(64px, 18vw, 88px);
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 0 auto 28px auto;
+  max-width: 440px;
+  width: 100%;
+}
+
+.media-btn {
+  position: relative;
+  background: rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.16);
+  color: var(--text);
+  padding: 14px 10px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.25s, background 0.25s,
+              border-color 0.25s, color 0.2s;
+  min-height: 56px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px;
+  touch-action: manipulation;
+  font-family: 'Sora', sans-serif;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.media-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, transparent 50%, rgba(var(--t-overlay-rgb),0.04));
+  pointer-events: none;
+}
+
+[id^="tvMuteBtn"]  { grid-column: span 2; }
+[id^="appMuteBtn"] { grid-column: span 2; }
+
+.media-btn:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.18), rgba(var(--t-accent2-rgb), 0.12)),
+    rgba(var(--t-card-rgb), 0.62);
+  box-shadow:
+    0 8px 24px rgba(var(--t-accent-rgb), 0.25),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.18) inset;
+  color: var(--text);
+}
+.media-btn:active { transform: scale(0.96); }
+
+/* Media-row hover (Vol+ / Vol- / Mute / CH+ / CH-) — theme-adaptive.
+   Previously each button had a hardcoded hue (green / purple / red / amber)
+   with light text that was unreadable on the light theme. All five now
+   share one accent-based hover that follows the active theme. */
+[id^="tvVolUpBtn"]:hover,  [id^="tvVolDownBtn"]:hover,
+[id^="tvMuteBtn"]:hover,
+[id^="tvChUpBtn"]:hover,   [id^="tvChDownBtn"]:hover,
+[id^="appVolUpBtn"]:hover, [id^="appVolDownBtn"]:hover,
+[id^="appMuteBtn"]:hover,
+[id^="appChUpBtn"]:hover,  [id^="appChDownBtn"]:hover {
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.18), rgba(var(--t-accent2-rgb), 0.12)),
+    rgba(var(--t-card-rgb), 0.62);
+  box-shadow:
+    0 8px 24px rgba(var(--t-accent-rgb), 0.28),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.18) inset;
+  color: var(--text);
+}
+
+
+
+/* ════════════════════════════════════════════════════════════════════
+   D-Pad — circular glass disc with glowing center OK
+   ════════════════════════════════════════════════════════════════════ */
+.dpad-container {
+  position: relative;
+  display: grid;
+  --dpad-size: clamp(64px, 18vw, 92px);
+  --dpad-gap: 12px;
   grid-template-columns: var(--dpad-size) var(--dpad-size) var(--dpad-size);
   grid-template-rows: var(--dpad-size) var(--dpad-size) var(--dpad-size);
-  gap: 10px; width: fit-content;
+  gap: var(--dpad-gap);
+  width: fit-content;
   margin: 0 auto 32px auto;
+  padding: 18px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%,
+      rgba(var(--t-accent2-rgb), 0.10) 0%,
+      rgba(var(--t-accent-rgb), 0.06) 45%,
+      transparent 70%);
 }
+.dpad-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.14);
+  background:
+    conic-gradient(from 90deg,
+      rgba(var(--t-accent2-rgb), 0.18) 0deg,
+      transparent 60deg,
+      rgba(var(--t-accent-rgb), 0.18) 180deg,
+      transparent 240deg,
+      rgba(var(--t-accent2-rgb), 0.18) 360deg);
+  filter: blur(10px);
+  opacity: 0.45;
+  pointer-events: none;
+  z-index: -1;
+}
+
 .dpad-btn {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 18px; display: flex; align-items: center; justify-content: center;
-  font-size: clamp(22px, 5vw, 32px); color: #e4e9f7; cursor: pointer;
-  transition: all 0.25s ease; box-shadow: 0 6px 16px rgba(0,0,0,0.35);
-  height: var(--dpad-size); width: var(--dpad-size);
+  position: relative;
+  background: rgba(var(--t-card-rgb), 0.62);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.18);
+  border-radius: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: clamp(20px, 4.5vw, 28px);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.18s, box-shadow 0.25s, background 0.25s,
+              border-color 0.25s, color 0.2s;
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.40),
+    0 0 0 1px rgba(var(--t-overlay-rgb), 0.04) inset;
+  height: var(--dpad-size);
+  width: var(--dpad-size);
   touch-action: manipulation;
+  font-weight: 600;
 }
-.dpad-btn:hover { background: #334155; transform: scale(1.06); }
+.dpad-btn:hover {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.22), rgba(var(--t-accent2-rgb), 0.18)),
+    rgba(var(--t-card-rgb), 0.62);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  color: var(--text);
+  transform: scale(1.06);
+  box-shadow:
+    0 10px 26px rgba(var(--t-accent-rgb), 0.32),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.20) inset;
+}
 .dpad-btn:active { transform: scale(0.92); }
-.dpad-up   { grid-column: 2; grid-row: 1; }
-.dpad-left { grid-column: 1; grid-row: 2; }
-.dpad-center { grid-column: 2; grid-row: 2; background: #4f8ef7 !important; color: white !important; font-size: clamp(16px, 3.5vw, 19px); }
+
+.dpad-up    { grid-column: 2; grid-row: 1; }
+.dpad-left  { grid-column: 1; grid-row: 2; }
 .dpad-right { grid-column: 3; grid-row: 2; }
 .dpad-down  { grid-column: 2; grid-row: 3; }
 
-/* Keypad - Responsive */
+/* OK button — glowing HA gradient orb at the center */
+.dpad-center {
+  grid-column: 2; grid-row: 2;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(var(--t-overlay-rgb), 0.18), transparent 55%),
+    linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%) !important;
+  border: 1px solid rgba(var(--t-overlay-rgb), 0.22) !important;
+  color: var(--on-accent) !important;
+  font-size: clamp(15px, 3.4vw, 18px) !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.6px;
+  border-radius: 50% !important;
+  box-shadow:
+    0 8px 26px rgba(var(--t-accent-rgb), 0.55),
+    0 0 0 1px rgba(var(--t-overlay-rgb), 0.18) inset,
+    0 0 0 6px rgba(var(--t-accent2-rgb), 0.12);
+  animation: okPulse 2.6s ease-in-out infinite;
+}
+.dpad-center:hover {
+  transform: scale(1.10);
+  box-shadow:
+    0 12px 34px rgba(var(--t-accent-rgb), 0.70),
+    0 0 0 2px rgba(var(--t-overlay-rgb), 0.25) inset,
+    0 0 0 8px rgba(var(--t-accent2-rgb), 0.18);
+}
+.dpad-center:active { transform: scale(0.94); }
+
+@keyframes okPulse {
+  0%, 100% { box-shadow: 0 8px 26px rgba(var(--t-accent-rgb), 0.55), 0 0 0 1px rgba(var(--t-overlay-rgb),0.18) inset, 0 0 0 6px rgba(var(--t-accent2-rgb), 0.12); }
+  50%      { box-shadow: 0 8px 30px rgba(var(--t-accent-rgb), 0.75), 0 0 0 1px rgba(var(--t-overlay-rgb),0.22) inset, 0 0 0 10px rgba(var(--t-accent2-rgb), 0.18); }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Keypad — classic remote keys with mono digits and HA gradient on press
+   ════════════════════════════════════════════════════════════════════ */
 .keypad {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
-  max-width: 400px; margin: 0 auto; width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 420px;
+  margin: 0 auto;
+  width: 100%;
+}
+/* App-remote keypad: the keys after "0" are commented out, so "0" is the only
+   key in its row — make it fill the whole row width. */
+.keypad-btn--wide {
+  flex-basis: 100%;
 }
 .keypad-btn {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 14px; height: clamp(56px, 12vw, 72px);
+  position: relative;
+  /* 4 keys per row: each fills a quarter minus its share of the 3×10px gaps.
+     Change "25%" (e.g. to 33.333% for 3-per-row) to re-flow the whole keypad. */
+  flex: 1 1 calc(25% - 7.5px);
+  background: rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.14);
+  border-radius: 14px;
+  height: clamp(56px, 12vw, 72px);
   font-size: clamp(18px, 3.5vw, 22px);
-  font-family: 'JetBrains Mono', monospace; font-weight: 600;
-  color: #e4e9f7; display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: all 0.25s ease;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.22s, background 0.22s,
+              border-color 0.22s, color 0.2s;
   touch-action: manipulation;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.30);
+  overflow: hidden;
 }
-.keypad-btn:hover { background: rgba(79,142,247,0.15); border-color: #4f8ef7; color: white; }
-#tvKey0 { grid-column: span 2; width: auto; }
-#tvKeyEnter, #tvBack, #tvHome, #tvMenu, #tvChList { font-size: clamp(13px, 2.5vw, 16px); }
+.keypad-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(var(--t-overlay-rgb), 0.05), transparent 40%);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.keypad-btn:hover {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.18), rgba(var(--t-accent2-rgb), 0.12)),
+    rgba(var(--t-card-rgb), 0.62);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  color: var(--text);
+  box-shadow:
+    0 8px 22px rgba(var(--t-accent-rgb), 0.28),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.18) inset;
+  transform: translateY(-2px);
+}
+.keypad-btn:active {
+  transform: scale(0.94);
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.32), rgba(var(--t-accent2-rgb), 0.24)),
+    rgba(var(--t-card-rgb), 0.65);
+  border-color: rgba(var(--t-accent2-rgb), 0.65);
+  color: var(--text);
+  box-shadow:
+    0 4px 14px rgba(var(--t-accent2-rgb), 0.34),
+    0 0 0 1px rgba(var(--t-accent2-rgb), 0.30) inset;
+}
 
-/* FAVORITES GRID — responsive */
+[id^="tvKey0"] { grid-column: span 1; width: auto; } 
+[id^="tvKeyEnter"], [id^="tvBack"], [id^="tvHome"], [id^="tvMenu"], [id^="tvChList"], [id^="tvExit"] {
+  font-size: clamp(13px, 2.5vw, 16px);
+  font-family: 'Sora', sans-serif;
+  font-weight: 600;
+  color: var(--text2);
+}
+[id^="tvKeyEnter"] {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.22), rgba(var(--t-accent2-rgb), 0.16)),
+    rgba(var(--t-card-rgb), 0.55);
+  border-color: rgba(var(--t-accent-rgb), 0.42);
+  color: #ccfbf1;
+}
+[id^="tvKeyEnter"]:hover {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.40), rgba(var(--t-accent2-rgb), 0.28)),
+    rgba(var(--t-card-rgb), 0.62);
+  color: var(--text);
+  border-color: rgba(var(--t-accent-rgb), 0.85);
+}
+
+
+[id^="appKey0"] { width: auto; }
+[id^="appKeyEnter"], [id^="appBack"], [id^="appHome"], [id^="appMenu"], [id^="appLaunchBtn"], [id^="appKeyExit"] {
+  font-size: clamp(13px, 2.5vw, 16px);
+  font-family: 'Sora', sans-serif;
+  font-weight: 600;
+  color: var(--text2);
+}
+[id^="appKeyEnter"] {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.22), rgba(var(--t-accent2-rgb), 0.16)),
+    rgba(var(--t-card-rgb), 0.55);
+  border-color: rgba(var(--t-accent-rgb), 0.42);
+  color: #ccfbf1;
+}
+[id^="appKeyEnter"]:hover {
+  background:
+    linear-gradient(135deg, rgba(var(--t-accent-rgb), 0.40), rgba(var(--t-accent2-rgb), 0.28)),
+    rgba(var(--t-card-rgb), 0.62);
+  color: var(--text);
+  border-color: rgba(var(--t-accent-rgb), 0.85);
+}
+
+
+
+
+/* ════════════════════════════════════════════════════════════════════
+   FAVORITES GRID — brand-tinted glass cards
+   Streaming brands get their iconic colors as a subtle tint + glow
+   on hover so the grid reads at a glance.
+   ════════════════════════════════════════════════════════════════════ */
 .favorites-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 12px;
-  margin: 16px auto 0 auto; max-width: 520px; width: 100%; padding: 0 8px;
+  margin: 16px auto 0 auto;
+  max-width: 540px;
+  width: 100%;
+  padding: 0 8px;
 }
 .fav-btn {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 14px; padding: 14px 8px;
-  font-size: 13.5px; font-weight: 500; color: #e4e9f7;
-  text-align: center; cursor: pointer; transition: all 0.25s ease;
-  min-height: 72px; display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3); line-height: 1.3;
+  position: relative;
+  background: rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.18);
+  border-radius: 16px;
+  padding: 16px 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.22s, box-shadow 0.25s, background 0.25s,
+              border-color 0.25s, color 0.2s;
+  min-height: 76px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30);
+  line-height: 1.3;
+  letter-spacing: 0.2px;
+  font-family: 'Sora', sans-serif;
   touch-action: manipulation;
+  overflow: hidden;
+}
+.fav-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(var(--t-overlay-rgb), 0.04), transparent 50%);
+  pointer-events: none;
 }
 .fav-btn:hover {
-  background: rgba(79,142,247,0.15);
-  border-color: rgba(79,142,247,0.5);
-  transform: translateY(-3px); color: #fff;
+  transform: translateY(-3px);
+  background:
+    linear-gradient(135deg, rgba(var(--fav-rgb, var(--t-accent-rgb)), 0.22), rgba(var(--fav-rgb, var(--t-accent-rgb)), 0.10)),
+    rgba(var(--t-card-rgb), 0.62);
+  border-color: rgba(var(--fav-rgb, var(--t-accent-rgb)), 0.65);
+  box-shadow:
+    0 12px 28px rgba(var(--fav-rgb, var(--t-accent-rgb)), 0.40),
+    0 0 0 1px rgba(var(--fav-rgb, var(--t-accent-rgb)), 0.22) inset;
+  color: var(--text);
 }
 .fav-btn:active { transform: scale(0.96); }
+
+/* Brand tints — declared as RGB triplets so opacity blending stays clean.
+   Order matches the markup: Netflix, YouTube, Disney+, Prime, HBO, CNN,
+   ESPN, BBC, Sky News, Al Jazeera. */
+.favorites-grid .fav-btn:nth-child(1)  { --fav-rgb: 229, 9, 20;     }   /* Netflix red */
+.favorites-grid .fav-btn:nth-child(2)  { --fav-rgb: 255, 59, 48;    }   /* YouTube red */
+.favorites-grid .fav-btn:nth-child(3)  { --fav-rgb: 113, 197, 232;  }   /* Disney+ blue */
+.favorites-grid .fav-btn:nth-child(4)  { --fav-rgb: 0, 168, 225;    }   /* Prime blue */
+.favorites-grid .fav-btn:nth-child(5)  { --fav-rgb: var(--t-accent2-rgb);  }   /* HBO purple */
+.favorites-grid .fav-btn:nth-child(6)  { --fav-rgb: 204, 0, 0;      }   /* CNN red */
+.favorites-grid .fav-btn:nth-child(7)  { --fav-rgb: 255, 0, 32;     }   /* ESPN red */
+.favorites-grid .fav-btn:nth-child(8)  { --fav-rgb: 188, 21, 33;    }   /* BBC red */
+.favorites-grid .fav-btn:nth-child(9)  { --fav-rgb: 255, 91, 0;     }   /* Sky orange */
+.favorites-grid .fav-btn:nth-child(10) { --fav-rgb: 248, 192, 32;   }   /* Al Jazeera gold */
 
 /* ====================== LIGHTS WIDGET — AREA CARDS ====================== */
 
 /* Global preset bar */
 .lights-global-bar {
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(2, 1fr);
   gap: 8px; margin-bottom: 20px;
- }
+}
 
+/* Subtle inline hint that explains the long-press gesture (otherwise hidden).
+   Sits between the section header and the global modes bar. Intentionally
+   low-contrast so it teaches once and fades into the background. */
+.lights-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -8px 0 14px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dashed rgba(var(--t-accent-rgb),0.22);
+  background: rgba(var(--t-accent-rgb),0.05);
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: rgba(var(--t-overlay-rgb),0.55);
+  font-family: 'Sora', sans-serif;
+  letter-spacing: 0.1px;
+}
+.lights-hint-ico { font-size: 14px; opacity: 0.85; flex-shrink: 0; }
+@media (max-width: 480px) {
+  .lights-hint { font-size: 10.5px; padding: 7px 10px; }
+}
 .lglobal-btn {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   gap: 5px; padding: 13px 6px 11px; border-radius: 14px;
   min-height: 52px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: #1a2035; color: #8fa3c8;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); color: var(--text2);
   font-family: 'Sora', sans-serif; font-size: clamp(11px, 1.5vw, 14px); font-weight: 500;
   cursor: pointer; transition: all 0.2s; line-height: 1.3;
   touch-action: manipulation;
 }
 .lglobal-btn:hover    { transform: translateY(-2px); }
 .lglobal-btn:active   { transform: scale(0.94); }
-.lglobal-on:hover    { background: rgba(34,211,165,0.13); border-color: rgba(34,211,165,0.38); color: #22d3a5; }
-.lglobal-relax:hover { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.38); color: #fbbf24; }
-.lglobal-dim:hover   { background: rgba(79,142,247,0.12); border-color: rgba(79,142,247,0.38); color: #4f8ef7; }
-.lglobal-off:hover   { background: rgba(249,107,107,0.12); border-color: rgba(249,107,107,0.38); color: #f96b6b; }
+/* Hover — every room-mode button shares the theme accent (no per-mode
+   orange/red/green/yellow), so the preset bar reads as one control set. */
+.lglobal-btn:hover {
+  background: rgba(var(--t-accent-rgb),0.13);
+  border-color: rgba(var(--t-accent-rgb),0.38);
+  color: var(--accent);
+}
+
+/* ─── Active / feedback state for room-mode buttons ───────────────────────
+   Applied by pageN.js when a room-mode button is pressed. All four modes
+   (Morning / Relax / Dressing / Sleep) use the active theme's accent, so
+   the feedback colour follows the selected theme (blue / dark / light).
+*/
+.lglobal-btn.lglobal-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: 0 4px 20px rgba(var(--t-accent-rgb),0.32);
+}
 
 /* Area cards grid — RESPONSIVE (auto-fill) */
 /* ══════════════════════════════════════════════════════════════════════
@@ -536,14 +1278,15 @@ body::after {
 .area-card {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row-reverse;        /* room name on left, switch on right */
   align-items: center;
+  justify-content: space-between;
   gap: 14px;
-  padding: 4px 18px 4px 4px;
+  padding: 8px 14px;
   border-radius: 999px;               /* full pill */
-  background: #1a2035;
-  border: 1px solid rgba(255,255,255,0.09);
-  min-height: 52px;
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  min-height: 56px;
   cursor: pointer;
   transition: background 0.22s, border-color 0.22s, box-shadow 0.22s,
               transform 0.15s;
@@ -552,20 +1295,19 @@ body::after {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   touch-action: manipulation;
-  text-align: center;
-
+  text-align: left;
 }
 .area-card:hover {
-  border-color: rgba(255,255,255,0.18);
+  border-color: rgba(var(--t-overlay-rgb),0.18);
 }
 .area-card.lp-holding {
   transform: scale(0.98);
-  border-color: rgba(79,142,247,0.45);
+  border-color: rgba(var(--t-accent-rgb),0.45);
 }
 
 /* Lit / relax tint applies to the whole pill subtly */
 .area-card.alit {
-  background: linear-gradient(90deg, rgba(251,191,36,0.08), rgba(26,32,53,1) 45%);
+  background: linear-gradient(90deg, rgba(251,191,36,0.08), rgba(var(--t-card-rgb),1) 45%);
   border-color: rgba(251,191,36,0.28);
 }
 .area-card.arelax {
@@ -573,12 +1315,43 @@ body::after {
   border-color: rgba(251,191,36,0.28);
 }
 
+/* ─── Per-preset feedback tint for area cards ─────────────────────────────
+   Mirrors the global lights bar colours so each room reflects which preset
+   is currently active.
+     • All On  → green   (var(--accent))
+     • Dim     → orange  (#f97316  – vivid)
+     • Relax   → orange  (#fbbf24  – warm amber, softer scale)
+     • All Off → red     (#f96b6b)
+   The bulb circle inside the card picks up the same colour so the cue is
+   visible at a glance.
+*/
+.area-card.apreset-on {
+  background: linear-gradient(90deg, rgba(var(--t-accent-rgb),0.14), rgba(var(--t-card-rgb),1) 50%);
+  border-color: rgba(var(--t-accent-rgb),0.45);
+  box-shadow: 0 0 14px rgba(var(--t-accent-rgb),0.18);
+}
+.area-card.apreset-dim {
+  background: linear-gradient(90deg, rgba(249,115,22,0.14), rgba(var(--t-card-rgb),1) 50%);
+  border-color: rgba(249,115,22,0.45);
+  box-shadow: 0 0 14px rgba(249,115,22,0.18);
+}
+.area-card.apreset-relax {
+  background: linear-gradient(90deg, rgba(251,191,36,0.14), rgba(40,30,8,1) 50%);
+  border-color: rgba(251,191,36,0.45);
+  box-shadow: 0 0 14px rgba(251,191,36,0.18);
+}
+.area-card.apreset-off {
+  background: linear-gradient(90deg, rgba(249,107,107,0.10), rgba(var(--t-card-rgb),1) 50%);
+  border-color: rgba(249,107,107,0.40);
+  box-shadow: 0 0 12px rgba(249,107,107,0.14);
+}
+
 /* Long-press progress fill — expands left→right during the 2s hold */
 .area-card::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgba(79,142,247,0.20), rgba(79,142,247,0.06));
+  background: linear-gradient(90deg, rgba(var(--t-accent-rgb),0.20), rgba(var(--t-accent-rgb),0.06));
   transform: scaleX(0);
   transform-origin: left center;
   transition: transform 0s;
@@ -593,52 +1366,109 @@ body::after {
 /* Children sit above the progress fill */
 .area-card > * { position: relative; z-index: 1; }
 
-/* ---- Lamp toggle button ---- */
-.acard-bulb {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: none;
+/* ---- iOS-style slider toggle ----
+   Replaces the older lamp bulb. Tap to flip on/off; long-press on the card
+   body still opens the detail popup. The whole control is a <button> so it's
+   keyboard-focusable; the .switch-track + .switch-thumb children are pure
+   visuals. The "on" state is driven by `.area-card.aon` (added in pageN.js
+   setAreaVisual when the preset is anything but 'off'). */
+.acard-switch {
   flex-shrink: 0;
-  background: #0f1422;
-  color: #6b7890;
-  font-size: 20px;
-  display: flex;
+  width: 56px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  transition: background 0.22s, color 0.22s, box-shadow 0.22s, transform 0.15s;
-  touch-action: manipulation;
-  outline: none;
 }
-.acard-bulb:active { transform: scale(0.92); }
-.acard-bulb:focus-visible { box-shadow: 0 0 0 2px rgba(79,142,247,0.5); }
+.acard-switch:active .switch-thumb { transform: translateY(-50%) scale(0.94); }
+.acard-switch:focus-visible .switch-track {
+  box-shadow: 0 0 0 2px rgba(var(--t-accent-rgb),0.55);
+}
 
-/* Lit bulb — amber glow, like the photo */
-.area-card.alit   .acard-bulb,
-.area-card.arelax .acard-bulb {
-  background: radial-gradient(circle at 50% 45%,
-                              rgba(251,191,36,0.35),
-                              rgba(251,191,36,0.10) 70%);
-  color: #fbbf24;
-  box-shadow: 0 0 14px rgba(251,191,36,0.4),
-              inset 0 0 8px rgba(251,191,36,0.25);
+.switch-track {
+  position: relative;
+  display: block;
+  width: 56px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.12);
+  transition: background 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+.switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #8a93a8, #4a5266);
+  transform: translateY(-50%);
+  transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              background 0.25s, box-shadow 0.25s, transform 0.12s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* ON state — pushed by setAreaVisual() adding .aon to the card. */
+.area-card.aon .switch-track {
+  background: linear-gradient(135deg, rgba(var(--t-accent-rgb),0.95), rgba(var(--t-accent-rgb),0.65));
+  border-color: rgba(var(--t-accent-rgb),0.7);
+  box-shadow: 0 0 12px rgba(var(--t-accent-rgb),0.35),
+              inset 0 0 4px rgba(0,0,0,0.2);
+}
+.area-card.aon .switch-thumb {
+  left: 27px;                                /* 56 − 24 − (3+2) = 27 */
+  background: linear-gradient(180deg, #ffffff, var(--text));
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+}
+
+/* Per-preset accent on the track so the active preset is still visible.
+   These override the generic .aon track colour to mirror the global
+   lights-bar palette: green / orange / amber / red. */
+.area-card.apreset-on .switch-track {
+  background: linear-gradient(135deg, rgba(var(--t-accent-rgb),0.95), rgba(var(--t-accent-rgb),0.65));
+  border-color: rgba(var(--t-accent-rgb),0.7);
+  box-shadow: 0 0 12px rgba(var(--t-accent-rgb),0.35);
+}
+.area-card.apreset-dim .switch-track {
+  background: linear-gradient(135deg, rgba(249,115,22,0.90), rgba(249,115,22,0.55));
+  border-color: rgba(249,115,22,0.7);
+  box-shadow: 0 0 12px rgba(249,115,22,0.35);
+}
+.area-card.apreset-relax .switch-track {
+  background: linear-gradient(135deg, rgba(251,191,36,0.90), rgba(251,191,36,0.55));
+  border-color: rgba(251,191,36,0.7);
+  box-shadow: 0 0 12px rgba(251,191,36,0.35);
+}
+.area-card.apreset-off .switch-track {
+  background: var(--surface);
+  border-color: rgba(var(--t-overlay-rgb),0.12);
+  box-shadow: none;
 }
 
 /* ---- Room name ---- */
 .acard-name {
-  font-size: clamp(3px, 7px, 10px);
+  font-size: clamp(13px, 1.8vw, 18px);
   font-weight: 600;
-  color: #e4e9f7;
+  color: var(--text);
   flex: 1;
   line-height: 1.2;
   letter-spacing: 0.2px;
-  justify-content: center;
+  text-align: left;
+  padding-left: 6px;
 }
 
-/* Legacy classes from older versions — hidden (kept in case of leftover markup) */
+/* Legacy classes from older versions — hidden (kept in case of leftover markup).
+   .acard-bulb is the pre-toggle lamp button; if any page hasn't been
+   migrated yet it stays hidden so the layout doesn't break. */
 .acard-head, .acard-state, .acard-indicator, .acard-ico,
-.acard-tog { display: none !important; }
+.acard-tog, .acard-bulb { display: none !important; }
 
 /* ══════════════════════════════════════════════════════════════════════
    AREA POPUP PANEL — CENTERED IN CURRENT VIEWPORT on every screen size.
@@ -667,11 +1497,11 @@ body::after {
 
 .area-panel {
   position: fixed;
-  top: 20%;
+  top: 50%;
   left: 50%;
   z-index: 100;
-  background: #161b27;
-  border: 1px solid rgba(79,142,247,0.25);
+  background: rgba(var(--t-card2-rgb), 0.62); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(var(--t-accent-rgb),0.25);
   border-radius: 22px;
   padding: 22px 22px 24px;
   width: calc(100% - 24px);
@@ -705,17 +1535,17 @@ body::after {
 .panel-hdr { display: flex; align-items: center; gap: 14px; margin: 4px 0 18px; }
 .panel-ico {
   width: 48px; height: 48px; border-radius: 14px;
-  background: rgba(79,142,247,0.14);
-  border: 1px solid rgba(79,142,247,0.28);
+  background: rgba(var(--t-accent-rgb),0.14);
+  border: 1px solid rgba(var(--t-accent-rgb),0.28);
   display: flex; align-items: center; justify-content: center;
   font-size: 24px; flex-shrink: 0;
 }
-.panel-title { font-size: 18px; font-weight: 700; color: #e4e9f7; }
-.panel-sub   { font-size: 11px; color: #8fa3c8; margin-top: 2px; }
+.panel-title { font-size: 18px; font-weight: 700; color: var(--text); }
+.panel-sub   { font-size: 11px; color: var(--text2); margin-top: 2px; }
 .panel-close {
   margin-left: auto; width: 36px; height: 36px;
-  border-radius: 50%; border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.5);
+  border-radius: 50%; border: 1px solid rgba(var(--t-overlay-rgb),0.1);
+  background: rgba(var(--t-overlay-rgb),0.05); color: rgba(var(--t-overlay-rgb),0.5);
   font-size: 14px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.2s; flex-shrink: 0;
@@ -746,8 +1576,8 @@ body::after {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; padding: 16px 10px 14px; border-radius: 14px;
   min-height: 86px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: #1a2035;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   color: rgb(var(--pc));
   font-family: 'Sora', sans-serif; font-size: 13px; font-weight: 500;
   cursor: pointer; transition: all 0.2s;
@@ -771,108 +1601,629 @@ body::after {
 }
 
 /* ---- Color themes (keys match window.LIGHT_PRESETS[key].color) ---- */
-.preset-btn.preset-on      { --pc: 34, 211, 165; }   /* green  — all on     */
+.preset-btn.preset-on      { --pc: var(--t-accent-rgb); }   /* green  — all on     */
 .preset-btn.preset-off     { --pc: 249, 107, 107; }  /* red    — all off    */
 .preset-btn.preset-dim     { --pc: 79, 142, 247; }   /* blue   — dim        */
 .preset-btn.preset-relax   { --pc: 251, 191, 36; }   /* amber  — relax      */
-.preset-btn.preset-tv      { --pc: 167, 139, 250; }  /* purple — TV scene   */
+.preset-btn.preset-tv      { --pc: var(--t-accent2-rgb); }  /* purple — TV scene   */
 .preset-btn.preset-guest   { --pc: 20, 184, 166; }   /* teal   — guest      */
 .preset-btn.preset-service { --pc: 249, 115, 22; }   /* orange — service    */
 .preset-btn.preset-generic { --pc: 148, 163, 184; }  /* slate  — p10..p15   */
 
-/* Panel dimmer */
-.panel-dimmer {
-  background: #1a2035; border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 18px; padding: 22px 20px 18px;
+/* ══════════════════════════════════════════════════════════════════════
+   AREA PANEL DIMMERS — multi-channel compact list
+   Replaces the old single .panel-dimmer (with SVG arc dial). One .dim-row
+   per channel (Main / Accent / Wall). Each row carries the channel key +
+   send join in data-* so a single delegated 'input' listener routes value
+   updates without per-row closures (see setupAreaPanelControls in pageN.js).
+   ══════════════════════════════════════════════════════════════════════ */
+.panel-dimmers {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
 }
-.panel-dimmer.hidden { display: none; }
+.panel-dimmers.hidden { display: none; }
+.panel-dimmers:empty { display: none; }
+
+.dim-row {
+  position: relative;
+  padding: 12px 14px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(251,191,36,0.07), transparent 60%),
+    rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition: border-color 0.2s, background 0.22s, box-shadow 0.22s;
+}
+.dim-row:hover { border-color: rgba(251,191,36,0.32); }
+.dim-row:focus-within {
+  border-color: rgba(251,191,36,0.55);
+  box-shadow: 0 0 0 1px rgba(251,191,36,0.20) inset;
+}
+
+.dim-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.dim-row-label {
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+.dim-row-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fbbf24;
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track is a relative-positioned bar holding three layered children:
+     1) the dim-row-fill (amber gradient, width = level%)
+     2) the native <input type="range"> on top (transparent, big thumb)
+   Stacking absolute positions keeps the DOM simple. */
+.dim-row-track {
+  position: relative;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(var(--t-overlay-rgb),0.06);
+  overflow: visible;
+}
+.dim-row-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(251,191,36,0.55), rgba(245,158,11,0.85));
+  box-shadow: 0 0 12px rgba(251,191,36,0.30);
+  transition: width 0.12s linear;
+  pointer-events: none;
+}
+.dim-row-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+     -moz-appearance: none;
+          appearance: none;
+  cursor: pointer;
+  outline: none;
+  touch-action: manipulation;
+}
+.dim-row-slider::-webkit-slider-runnable-track { height: 22px; background: transparent; border-radius: 999px; }
+.dim-row-slider::-moz-range-track            { height: 22px; background: transparent; border-radius: 999px; }
+.dim-row-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 0 14px rgba(251,191,36,0.55), 0 2px 6px rgba(0,0,0,0.4);
+  border: 2px solid rgba(var(--t-overlay-rgb),0.18);
+  cursor: pointer;
+  margin-top: -2px;
+  transition: transform 0.12s;
+}
+.dim-row-slider::-moz-range-thumb {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 0 14px rgba(251,191,36,0.55), 0 2px 6px rgba(0,0,0,0.4);
+  border: 2px solid rgba(var(--t-overlay-rgb),0.18);
+  cursor: pointer;
+}
+.dim-row-slider:active::-webkit-slider-thumb { transform: scale(1.18); }
+.dim-row-slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(251,191,36,0.35), 0 2px 6px rgba(0,0,0,0.4); }
+
+/* Per-channel accent: differentiate the three rows so users can tell at a
+   glance which channel is which. Main keeps the default amber; Accent uses
+   teal; Wall uses purple. */
+.dim-row[data-channel="accent"] {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(var(--t-accent-rgb),0.10), transparent 60%),
+    rgba(var(--t-card-rgb), 0.55);
+}
+.dim-row[data-channel="accent"]:hover        { border-color: rgba(var(--t-accent-rgb),0.40); }
+.dim-row[data-channel="accent"]:focus-within { border-color: rgba(var(--t-accent-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--t-accent-rgb),0.22) inset; }
+.dim-row[data-channel="accent"] .dim-row-value { color: var(--accent); }
+.dim-row[data-channel="accent"] .dim-row-fill  { background: linear-gradient(90deg, rgba(var(--t-accent-rgb),0.55), rgba(var(--t-accent-rgb),0.90)); box-shadow: 0 0 12px rgba(var(--t-accent-rgb),0.30); }
+.dim-row[data-channel="accent"] .dim-row-slider::-webkit-slider-thumb { background: linear-gradient(135deg, var(--accent), var(--accent)); box-shadow: 0 0 14px rgba(var(--t-accent-rgb),0.55), 0 2px 6px rgba(0,0,0,0.4); }
+.dim-row[data-channel="accent"] .dim-row-slider::-moz-range-thumb     { background: linear-gradient(135deg, var(--accent), var(--accent)); box-shadow: 0 0 14px rgba(var(--t-accent-rgb),0.55), 0 2px 6px rgba(0,0,0,0.4); }
+
+.dim-row[data-channel="wall"] {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(var(--t-accent2-rgb),0.10), transparent 60%),
+    rgba(var(--t-card-rgb), 0.55);
+}
+.dim-row[data-channel="wall"]:hover        { border-color: rgba(var(--t-accent2-rgb),0.40); }
+.dim-row[data-channel="wall"]:focus-within { border-color: rgba(var(--t-accent2-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--t-accent2-rgb),0.22) inset; }
+.dim-row[data-channel="wall"] .dim-row-value { color: var(--accent2); }
+.dim-row[data-channel="wall"] .dim-row-fill  { background: linear-gradient(90deg, rgba(var(--t-accent2-rgb),0.55), rgba(var(--t-accent2-rgb),0.90)); box-shadow: 0 0 12px rgba(var(--t-accent2-rgb),0.30); }
+.dim-row[data-channel="wall"] .dim-row-slider::-webkit-slider-thumb { background: linear-gradient(135deg, var(--accent2), var(--accent2)); box-shadow: 0 0 14px rgba(var(--t-accent2-rgb),0.55), 0 2px 6px rgba(0,0,0,0.4); }
+.dim-row[data-channel="wall"] .dim-row-slider::-moz-range-thumb     { background: linear-gradient(135deg, var(--accent2), var(--accent2)); box-shadow: 0 0 14px rgba(var(--t-accent2-rgb),0.55), 0 2px 6px rgba(0,0,0,0.4); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   AREA POPUP — CHANNEL LIST
+   One .ch-row per lighting channel (from joins1.js → LIGHTS_<AREA>.CHANNELS).
+   Each row: channel name  |  [ON] [OFF]  |  dimmer slider  value%
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Detail button — small icon button at the right end of each .area-row */
+.area-detail-btn {
+  flex: 0 0 auto;
+  /* responsive width: never narrower than a 56px touch target, scales with
+     viewport, caps at 96px on large panels */
+  width: clamp(56px, 11vw, 96px); height: 34px;
+  border-radius: 9px;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  background: rgba(var(--t-overlay-rgb),0.04);
+  color: rgba(var(--t-overlay-rgb),0.38);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .18s, border-color .18s, color .18s, transform .12s;
+  touch-action: manipulation;
+}
+.area-detail-btn:hover {
+  background: rgba(var(--t-accent-rgb),0.12);
+  border-color: rgba(var(--t-accent-rgb),0.38);
+  color: var(--accent);
+}
+.area-detail-btn:active { transform: scale(0.88); }
+
+/* Channel list container */
+.panel-ch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Single channel row */
+.ch-row {
+  background: rgba(var(--t-overlay-rgb),0.03);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.08);
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  transition: border-color .18s, background .18s;
+}
+.ch-row:hover { background: rgba(var(--t-overlay-rgb),0.05); border-color: rgba(var(--t-accent-rgb),0.20); }
+
+/* Name + ON/OFF side by side — grid gives name all remaining space */
+.ch-row-top {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ch-name {
+  min-width: 0;
+  font-size: 12px; font-weight: 600;
+  font-family: 'Sora', sans-serif;
+  color: #c8d4ec; letter-spacing: 0.2px;
+  overflow-wrap: break-word;
+  line-height: 1.4;
+}
+.ch-onoff { display: flex; gap: 6px; }
+
+/* ON / OFF buttons */
+.ch-btn {
+  padding: 5px 10px; min-height: 32px; min-width: 0;
+  border-radius: 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+  font-family: 'Sora', sans-serif;
+  cursor: pointer; border: 1px solid;
+  transition: background .15s, border-color .15s, transform .10s;
+  touch-action: manipulation;
+}
+/* Each button inside the ch-onoff row grows equally */
+.ch-onoff .ch-btn { flex: 1; }
+  
+.ch-on-btn  { background: rgba(var(--t-accent-rgb),0.10); border-color: rgba(var(--t-accent-rgb),0.28); color: var(--accent); }
+.ch-on-btn:hover  { background: rgba(var(--t-accent-rgb),0.22); border-color: rgba(var(--t-accent-rgb),0.60); }
+.ch-on-btn:active { transform: scale(0.93); }
+
+.ch-off-btn { background: rgba(249,107,107,0.08); border-color: rgba(249,107,107,0.25); color: #f96b6b; }
+.ch-off-btn:hover  { background: rgba(249,107,107,0.18); border-color: rgba(249,107,107,0.55); }
+.ch-off-btn:active { transform: scale(0.93); }
+
+/* Pressed / active state — stays highlighted until the other button is pressed */
+.ch-on-btn.ch-btn-active {
+  background: rgba(var(--t-accent-rgb),0.26);
+  border-color: rgba(var(--t-accent-rgb),0.75);
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(var(--t-accent-rgb),0.30), 0 0 10px rgba(var(--t-accent-rgb),0.28);
+}
+.ch-off-btn.ch-btn-active,
+.ch-off-active {
+  background: rgba(249,107,107,0.24);
+  border-color: rgba(249,107,107,0.72);
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(249,107,107,0.30), 0 0 10px rgba(249,107,107,0.26);
+}
+
+/* Dimmer row: track + value */
+.ch-dim-wrap { display: flex; align-items: center; gap: 10px; }
+
+.ch-dim-track {
+  position: relative;
+  flex: 1; height: 22px;
+  background: rgba(var(--t-overlay-rgb),0.07);
+  border-radius: 999px;
+  overflow: visible;
+}
+.ch-dim-fill {
+  position: absolute; inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(251,191,36,0.55), rgba(251,191,36,0.92));
+  box-shadow: 0 0 10px rgba(251,191,36,0.26);
+  pointer-events: none;
+  transition: width .05s;
+}
+.ch-dim-slider {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  -webkit-appearance: none; appearance: none;
+  background: transparent; border: none; outline: none;
+  cursor: pointer; touch-action: manipulation; margin: 0;
+}
+.ch-dim-slider::-webkit-slider-runnable-track { height: 22px; background: transparent; border-radius: 999px; }
+.ch-dim-slider::-moz-range-track             { height: 22px; background: transparent; border-radius: 999px; }
+.ch-dim-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 0 12px rgba(251,191,36,0.55), 0 2px 6px rgba(0,0,0,0.40);
+  border: 2px solid rgba(var(--t-overlay-rgb),0.20);
+  cursor: pointer; transition: transform .12s;
+}
+.ch-dim-slider::-moz-range-thumb {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 0 12px rgba(251,191,36,0.55), 0 2px 6px rgba(0,0,0,0.40);
+  border: 2px solid rgba(var(--t-overlay-rgb),0.20);
+  cursor: pointer;
+}
+.ch-dim-slider:active::-webkit-slider-thumb { transform: scale(1.18); }
+.ch-dim-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(251,191,36,0.35), 0 2px 6px rgba(0,0,0,0.40);
+}
+.ch-dim-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; font-weight: 500;
+  color: #fbbf24; min-width: 38px; text-align: right;
+}
+
+/* Header text wrapper — lets the title + sub stack while the icon and
+   close button sit on either side. */
+.panel-hdr-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.panel-hdr-text .panel-title,
+.panel-hdr-text .panel-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   APP REMOTE POPUP — opened by the 5 quick-launch buttons in the TV widget
+   (OSN / Apple TV / BeIN / Shahid / Netflix). Same visual chrome as
+   .area-panel but holds a dpad + keypad instead of preset tiles.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Per-app accent on the quick-grid launchers. */
+.app-launcher-grid { gap: 12px; }
+.qbtn.app-launcher {
+  background: rgba(var(--t-card-rgb), 0.55);
+  border-color: rgba(var(--t-overlay-rgb),0.09);
+  color: #cbd5e1;
+}
+.qbtn.app-launcher .qi { font-size: clamp(22px, 2.6vw, 28px); }
+.qbtn.app-launcher:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--t-accent-rgb),0.45);
+  background: rgba(var(--t-accent-rgb),0.08);
+  color: var(--accent);
+}
+.qbtn.app-launcher[data-app="osn"]:hover     { border-color: rgba(var(--t-accent-rgb),0.5);  background: rgba(var(--t-accent-rgb),0.10);  color: var(--accent); }
+.qbtn.app-launcher[data-app="appletv"]:hover { border-color: rgba(229,231,235,0.5); background: rgba(229,231,235,0.10); color: #f3f4f6; }
+.qbtn.app-launcher[data-app="bein"]:hover    { border-color: rgba(var(--t-accent2-rgb),0.5); background: rgba(var(--t-accent2-rgb),0.10); color: var(--accent2); }
+.qbtn.app-launcher[data-app="shahid"]:hover  { border-color: rgba(251,191,36,0.5);  background: rgba(251,191,36,0.10);  color: #fbbf24; }
+.qbtn.app-launcher[data-app="netflix"]:hover { border-color: rgba(229,9,20,0.55);   background: rgba(229,9,20,0.10);    color: #ef4444; }
+
+/* Inline view-swap inside the TV widget: .tv-main-view is the default
+   content (header, launchers, sub-tabs, controls). When a quick-launch
+   button is tapped, JS hides this view and shows .tv-app-view (the per-app
+   remote with dpad + keypad) in the same place. The [hidden] attribute
+   handles visibility for both views. */
+.tv-main-view, .tv-app-view {
+  display: block;
+}
+.tv-main-view[hidden], .tv-app-view[hidden] { display: none; }
+
+.tv-app-view {
+  animation: appViewIn 0.22s ease both;
+}
+@keyframes appViewIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* App remote header: back button on top, then app icon + title. */
+.app-view-hdr {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.app-back-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--t-accent-rgb),0.35);
+  background: rgba(var(--t-accent-rgb),0.10);
+  color: var(--accent);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, transform 0.12s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.app-back-btn:hover {
+  background: rgba(var(--t-accent-rgb),0.18);
+  border-color: rgba(var(--t-accent-rgb),0.55);
+}
+.app-back-btn:active { transform: scale(0.97); }
+.app-back-btn .back-arrow { font-size: 16px; line-height: 1; }
+
+.app-view-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+}
+.app-view-ico {
+  font-size: clamp(28px, 3.4vw, 36px);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.app-view-title {
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(16px, 1.9vw, 20px);
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.15;
+}
+.app-view-sub {
+  font-size: 12px;
+  color: rgba(var(--t-overlay-rgb),0.5);
+  margin-top: 2px;
+}
+
+/* The .media-controls-grid inside both the app remote view (.tv-app-view)
+   and the TV Controls sub-widget (#tv-controls-pageN) uses the same
+   glassmorphism card and 2-col grid layout (Vol+/Vol- / Mute full-width /
+   CH+/CH-). Both surfaces feel unified. */
+.tv-app-view .media-controls-grid,
+[id^="tv-controls-page"] .media-controls-grid {
+  position: relative;
+  padding: 22px 18px 24px;
+  border-radius: 26px;
+  background:
+    radial-gradient(ellipse 480px 320px at 50% -10%, rgba(var(--t-accent2-rgb), 0.16), transparent 70%),
+    radial-gradient(ellipse 420px 300px at 50% 110%, rgba(var(--t-accent-rgb), 0.14), transparent 70%),
+    rgba(var(--t-card2-rgb), 0.55);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.18);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.06) inset;
+  overflow: hidden;
+}
+/* Scan-line glimmer along the top edge — same as #tv-controls-pageN. */
+.tv-app-view .media-controls-grid::before,
+[id^="tv-controls-page"] .media-controls-grid::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 8%; right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg,
+              transparent 0%,
+              rgba(var(--t-accent2-rgb), 0.55) 35%,
+              rgba(var(--t-accent-rgb), 0.55) 65%,
+              transparent 100%);
+  pointer-events: none;
+}
+/* All children must sit above the radial-glow backdrop. */
+.tv-app-view .media-controls-grid > *,
+[id^="tv-controls-page"] .media-controls-grid > * { position: relative; z-index: 1; }
+
+
 
 /* ══════════════════════════════════════════════════════════════════════
    RESPONSIVE BREAKPOINTS
+
+   Target devices:
+   ┌──────────────────────┬─────────────────┬───────────────────────────┐
+   │  Device              │  Stock res      │  Breakpoint band          │
+   ├──────────────────────┼─────────────────┼───────────────────────────┤
+   │  Tiny phones         │   320×568       │   < 360 px                │
+   │  Phones portrait     │   375-430 wide  │   360-479 px              │
+   │  Phones landscape /  │   480-767 wide  │   480-767 px              │
+   │   small tablets      │                 │                           │
+   │  iPad mini portrait /│   768×1024      │   768-1023 px             │
+   │   TSW-560 portrait   │   720×1280      │                           │
+   │  iPad landscape /    │   1024×768      │   1024-1279 px            │
+   │   iPad Pro 12.9 port │   1024×1366     │                           │
+   │  TSW-770/1060 land   │   1280×800      │   1280-1599 px            │
+   │   small desktops     │                 │                           │
+   │  TSW-1070 / wall /   │   1920×1200     │   ≥ 1600 px               │
+   │   large displays     │                 │                           │
+   └──────────────────────┴─────────────────┴───────────────────────────┘
    ══════════════════════════════════════════════════════════════════════ */
 
-/* Very small phones (< 360px) */
+/* ─────────── Tiny phones (< 360 px) ─────────── */
 @media (max-width: 359px) {
-  .lights-global-bar { grid-template-columns: repeat(2, 1fr); }
-  .area-grid { grid-template-columns: 1fr; }
-  /* .preset-grid auto-fits — tighten the min a bit on tiny screens */
-  .preset-grid { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
-  .preset-btn { min-height: 78px; padding: 12px 8px 10px; }
-  .quick-grid { grid-template-columns: 1fr 1fr; }
-  .lglobal-btn { font-size: 12px; padding: 12px 8px; }
-  .energy-chips { flex-direction: column; align-items: stretch; }
+  .page-wrap         { padding: 0 12px 32px; }
+  .lights-global-bar { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .lglobal-btn       { font-size: 11px; padding: 10px 6px; }
+  .area-grid         { grid-template-columns: 1fr; }
+  .shades-grid       { grid-template-columns: 1fr; }
+  .device-grid       { grid-template-columns: 1fr; }
+  .preset-grid       { grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); gap: 8px; }
+  .preset-btn        { min-height: 72px; padding: 10px 6px 8px; font-size: 11px; }
+  .quick-grid        { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .favorites-grid    { grid-template-columns: 1fr 1fr; }
+  .ac-mode-row,
+  .ac-fan-row        { grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 6px; }
+  .ac-mode-btn,
+  .ac-fan-btn        { min-height: 50px; padding: 8px 4px; font-size: 11px; }
+  .keypad            { gap: 6px; }
+  .keypad-btn        { font-size: 18px; height: 44px; }
+  .hov-modes-grid    { grid-template-columns: 1fr; }
+  .hov-floor-block   { padding: 14px; }
+  .home-ctrl-bar     { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .hcb-btn           { padding: 10px 8px; }
+  .sec-title         { font-size: 14px; }
+  .ac-card           { padding: 14px; gap: 12px; }
+  .ac-dial-wrap      { width: clamp(160px, 60vw, 220px); }
 }
 
-/* Phones (360–599px) */
-@media (min-width: 360px) and (max-width: 599px) {
-  .area-grid { grid-template-columns: 1fr 1fr; }
-  .quick-grid { grid-template-columns: 1fr 1fr 1fr; }
+/* ─────────── Phones portrait (360-479 px) ─────────── */
+@media (min-width: 360px) and (max-width: 479px) {
+  .page-wrap         { padding: 0 16px 40px; }
+  .area-grid         { grid-template-columns: 1fr 1fr; }
+  .shades-grid       { grid-template-columns: 1fr; }
+  .device-grid       { grid-template-columns: 1fr 1fr; }
+  .quick-grid        { grid-template-columns: repeat(3, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(3, 1fr); }
+  .hov-modes-grid    { grid-template-columns: 1fr 1fr; }
+  .ac-mode-row,
+  .ac-fan-row        { grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); }
+  .home-ctrl-bar  { grid-template-columns: repeat(4, 1fr); }
 }
 
-/* Tablets portrait (600–899px) */
-@media (min-width: 600px) and (max-width: 899px) {
-  .area-grid { grid-template-columns: 1fr 1fr; }
-  .device-grid { grid-template-columns: repeat(2, 1fr); }
-  .quick-grid { grid-template-columns: repeat(3, 1fr); }
-  .favorites-grid { grid-template-columns: repeat(4, 1fr); }
-  .preset-btn { min-height: 96px; }
+/* ─────────── Phone landscape / small tablets (480-767 px) ─────────── */
+@media (min-width: 480px) and (max-width: 767px) {
+  .page-wrap         { padding: 0 20px 44px; }
+  .area-grid         { grid-template-columns: 1fr 1fr; }
+  .shades-grid       { grid-template-columns: 1fr 1fr; }
+  .device-grid       { grid-template-columns: repeat(2, 1fr); }
+  .quick-grid        { grid-template-columns: repeat(4, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(4, 1fr); }
+  .hov-modes-grid    { grid-template-columns: repeat(3, 1fr); }
+  .ac-dial-row       { gap: 14px; }
+  .ac-dial-wrap      { width: clamp(180px, 50vw, 240px); }
 }
 
-/* Tablets landscape / small laptops (900–1199px) */
-@media (min-width: 900px) and (max-width: 1199px) {
-  .area-grid { grid-template-columns: 1fr 1fr; }
-  .device-grid { grid-template-columns: repeat(3, 1fr); }
-  .quick-grid { grid-template-columns: repeat(4, 1fr); }
-  .favorites-grid { grid-template-columns: repeat(5, 1fr); }
+/* ─────────── iPad mini portrait / TSW-560 portrait (768-1023 px) ─────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .page-wrap         { padding: 0 24px 48px; }
+  .area-grid         { grid-template-columns: repeat(3, 1fr); }
+  .shades-grid       { grid-template-columns: 1fr 1fr; }
+  .device-grid       { grid-template-columns: repeat(3, 1fr); }
+  .quick-grid        { grid-template-columns: repeat(4, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(4, 1fr); }
+  .hov-modes-grid    { grid-template-columns: repeat(3, 1fr); }
+  .ac-mode-row,
+  .ac-fan-row        { grid-template-columns: repeat(5, 1fr); }
 }
 
-/* Laptops / Desktops / Large touch (≥ 1200px) */
-@media (min-width: 1200px) {
-  .page-wrap { padding: 0 32px 56px; }
-  .area-grid { grid-template-columns: repeat(3, 1fr); }
-  .device-grid { grid-template-columns: repeat(4, 1fr); }
-  .quick-grid { grid-template-columns: repeat(5, 1fr); }
-  .favorites-grid { grid-template-columns: repeat(5, 1fr); max-width: 640px; }
-  .area-panel { max-width: 620px; }
-  .preset-grid { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+/* ─────────── iPad landscape / iPad Pro portrait (1024-1279 px) ─────────── */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .page-wrap         { padding: 0 28px 52px; }
+  .area-grid         { grid-template-columns: repeat(4, 1fr); }
+  .shades-grid       { grid-template-columns: repeat(3, 1fr); }
+  .device-grid       { grid-template-columns: repeat(4, 1fr); }
+  .quick-grid        { grid-template-columns: repeat(5, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(5, 1fr); }
+  .hov-modes-grid    { grid-template-columns: repeat(3, 1fr); }
 }
 
-/* Very large touch screens / wall panels (≥ 1600px) */
+/* ─────────── TSW-770 / TSW-1060 landscape / desktop (1280-1599 px) ─────────── */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  .page-wrap         { padding: 0 32px 56px; }
+  .area-grid         { grid-template-columns: repeat(4, 1fr); }
+  .shades-grid       { grid-template-columns: repeat(4, 1fr); }
+  .device-grid       { grid-template-columns: repeat(4, 1fr); }
+  .quick-grid        { grid-template-columns: repeat(5, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(5, 1fr); max-width: 700px; }
+  .area-panel        { max-width: 620px; }
+  .preset-grid       { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  .hov-modes-grid    { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ─────────── TSW-1070 / large wall panels (≥ 1600 px) ─────────── */
 @media (min-width: 1600px) {
-  .page-wrap { padding: 0 48px 64px; }
-  .area-grid { grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .area-card { min-height: 72px; padding: 8px 24px 8px 8px; }
-  .acard-bulb { width: 56px; height: 56px; font-size: 26px; }
-  .acard-name { font-size: 16px; }
-}
- 
-/* Tablets landscape / small laptops (900–1199px) */
-@media (min-width: 900px) and (max-width: 1199px) {
-  .area-grid { grid-template-columns: repeat(4, 1fr); }
-  .device-grid { grid-template-columns: repeat(3, 1fr); }
-  .quick-grid { grid-template-columns: repeat(4, 1fr); }
-  .favorites-grid { grid-template-columns: repeat(5, 1fr); }
-}
-
-/* Laptops / Desktops / Large touch (≥ 1200px) */
-@media (min-width: 1200px) {
-  .page-wrap { padding: 0 32px 56px; }
-  .area-grid { grid-template-columns: repeat(5, 1fr); }
-  .device-grid { grid-template-columns: repeat(4, 1fr); }
-  .quick-grid { grid-template-columns: repeat(5, 1fr); }
-  .favorites-grid { grid-template-columns: repeat(5, 1fr); max-width: 640px; }
-  /* Panel widens slightly on large screens so 13 presets fit in 4 rows max */
-  .area-panel { max-width: 620px; }
-  .preset-grid { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  .page-wrap         { padding: 0 48px 64px; }
+  .area-grid         { grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .area-card         { min-height: 72px; padding: 10px 22px; }
+  .acard-switch                       { width: 64px; height: 36px; }
+  .acard-switch .switch-track         { width: 64px; height: 36px; }
+  .acard-switch .switch-thumb         { width: 28px; height: 28px; left: 4px; }
+  .area-card.aon .acard-switch .switch-thumb { left: 32px; }  /* 64 − 28 − 4 */
+  .acard-name        { font-size: 16px; }
+  .shades-grid       { grid-template-columns: repeat(4, 1fr); }
+  .device-grid       { grid-template-columns: repeat(5, 1fr); }
+  .quick-grid        { grid-template-columns: repeat(5, 1fr); }
+  .favorites-grid    { grid-template-columns: repeat(6, 1fr); max-width: 800px; }
+  .area-panel        { max-width: 720px; }
+  .preset-grid       { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .hov-modes-grid    { grid-template-columns: repeat(6, 1fr); }
 }
 
-/* Very large touch screens / wall panels (≥ 1600px) */
-@media (min-width: 1600px) {
-  .page-wrap { padding: 0 48px 64px; }
-  .area-grid { grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .area-card { min-height: 58px; padding: 6px 24px 6px 6px; }
-  .acard-bulb { width: 46px; height: 46px; font-size: 22px; }
-  .acard-name { font-size: 15px; }
+/* ─────────── Phone landscape (low height) ─────────── */
+/* When a phone is held landscape, vertical space is the constraint.       */
+/* Compress headers and the AC dial row to keep one fold visible.          */
+@media (max-width: 920px) and (orientation: landscape) and (max-height: 480px) {
+  .page-wrap         { padding: 0 20px 28px; }
+  .ac-dial-row       { flex-direction: row; gap: 12px; }
+  .ac-dial-wrap      { width: clamp(150px, 38vw, 210px); }
+  .ac-mode-btn,
+  .ac-fan-btn        { min-height: 48px; padding: 8px 4px; }
+  .home-ctrl-bar  { padding: 8px 0; }
+  .sec-hdr           { margin-bottom: 8px; }
+}
+
+/* ─────────── Touch / coarse-pointer devices ─────────── */
+/* On TSW panels, iPad, and phones, hover-based transforms persist after  */
+/* tap (sticky :hover). Disable hover translates so the UI doesn't jitter. */
+@media (hover: none) and (pointer: coarse) {
+  .hcb-btn:hover       { transform: none; }
+  .area-card:hover     { transform: none; }
+  .preset-btn:hover    { transform: none; }
+  .ac-power-btn:hover  { transform: none; }
+  .sc-btn:hover        { transform: none; }
+}
+
+/* ─────────── Reduced motion ─────────── */
+/* Slower CPUs (TSW-560, low-end Android) — drop expensive animations.    */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.05s !important;
+  }
 }
 /* ══════════════════════════════════════════════════════════════════════
    SHADES WIDGET — custom drag-thumb cards
@@ -880,443 +2231,1873 @@ body::after {
 
 .shades-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
   margin-bottom: 24px;
 }
 
 .shade-card {
-  background: #1a2035;
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 20px;
-  padding: 16px 14px 14px;
+  position: relative;
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(var(--t-accent-rgb),0.06), transparent 55%),
+    radial-gradient(120% 100% at 100% 100%, rgba(var(--t-accent2-rgb),0.05), transparent 55%),
+    rgba(var(--t-card-rgb), 0.65);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.08);
+  border-radius: 22px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 12px;
-  transition: border-color 0.25s, box-shadow 0.25s;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
+  transition: border-color 0.25s, box-shadow 0.25s, transform 0.18s;
+  overflow: hidden;
 }
-.shade-card.sc-s-open    { border-color: rgba(34,211,165,0.40);  box-shadow: 0 4px 20px rgba(34,211,165,0.10); }
-.shade-card.sc-s-closed  { border-color: rgba(255,255,255,0.07); }
-.shade-card.sc-s-moving  { border-color: rgba(251,191,36,0.40);  box-shadow: 0 4px 20px rgba(251,191,36,0.10); }
+.shade-card::before {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(var(--t-overlay-rgb),0.18), transparent);
+  pointer-events: none;
+}
+.shade-card.sc-s-open    { border-color: rgba(var(--t-accent-rgb),0.35);  box-shadow: 0 6px 24px rgba(var(--t-accent-rgb),0.10); }
+.shade-card.sc-s-closed  { border-color: rgba(var(--t-overlay-rgb),0.08); }
+.shade-card.sc-s-moving  { border-color: rgba(251,191,36,0.45);  box-shadow: 0 6px 28px rgba(251,191,36,0.14); }
 .shade-card.sc-s-stopped { border-color: rgba(249,107,107,0.35); }
 
-.sc-top { display: flex; align-items: center; gap: 9px; }
-.sc-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
-.sc-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.sc-name {
-  font-size: 13px; font-weight: 600; color: #e4e9f7;
+/* Header row */
+.shade-card .sc-top { display: flex; align-items: center; gap: 10px; }
+.shade-card .sc-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
+.shade-card .sc-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.shade-card .sc-name {
+  font-size: 13px; font-weight: 700; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0.2px;
 }
-.sc-status {
+.shade-card .sc-status {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10px; font-weight: 500; color: #8fa3c8;
+  font-size: 10px; font-weight: 600; color: var(--text2);
   font-family: 'JetBrains Mono', monospace;
-  text-transform: uppercase; letter-spacing: 0.4px;
+  text-transform: uppercase; letter-spacing: 0.5px;
 }
-.sc-dot {
+.shade-card .sc-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: rgba(255,255,255,0.2); flex-shrink: 0;
-  animation: blink 2.5s ease-in-out infinite;
-  transition: background 0.3s;
+  background: rgba(var(--t-overlay-rgb),0.25); flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
 }
-.sc-s-open    .sc-dot { background: #22d3a5; }
-.sc-s-moving  .sc-dot { background: #fbbf24; }
-.sc-s-stopped .sc-dot { background: #f96b6b; }
-
-.sc-pos-badge {
-  margin-left: auto; flex-shrink: 0;
+.shade-card.sc-s-open    .sc-dot { background: var(--accent); box-shadow: 0 0 8px rgba(var(--t-accent-rgb),0.6); }
+.shade-card.sc-s-moving  .sc-dot { background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,0.6); animation: blink 1.2s ease-in-out infinite; }
+.shade-card.sc-s-stopped .sc-dot { background: #f96b6b; box-shadow: 0 0 8px rgba(249,107,107,0.6); }
+.shade-card .sc-pct {
+  flex-shrink: 0;
   font-size: 11px; font-weight: 700;
   font-family: 'JetBrains Mono', monospace;
   color: #fbbf24;
   background: rgba(251,191,36,0.10);
-  border: 1px solid rgba(251,191,36,0.20);
+  border: 1px solid rgba(251,191,36,0.22);
   border-radius: 8px;
-  padding: 3px 7px;
-  white-space: nowrap;
+  padding: 3px 8px;
+  min-width: 44px; text-align: center;
 }
 
-/* Track wrap */
-.sc-track-wrap {
+/* === Position bar === */
+.shade-card .sc-bar {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.sc-orient-vert  { height: 160px; width: 100%; }
-.sc-orient-horz  { height: 72px;  width: 100%; }
-
-/* Track background */
-.sc-track-bg {
-  position: absolute;
-  background: rgba(255,255,255,0.08);
-  border-radius: 6px;
+  height: 10px;
+  background: rgba(var(--t-overlay-rgb),0.06);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.06);
+  border-radius: 999px;
   overflow: hidden;
 }
-.sc-orient-vert .sc-track-bg {
-  width: 7px; height: 100%;
-  left: 50%; top: 0;
-  transform: translateX(-50%);
+.shade-card .sc-bar::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 12.5%, rgba(var(--t-overlay-rgb),0.05) 12.5% calc(12.5% + 1px));
+  pointer-events: none;
 }
-.sc-orient-horz .sc-track-bg {
-  height: 7px; width: 100%;
-  top: 50%; left: 0;
-  transform: translateY(-50%);
+.shade-card .sc-bar-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #fbbf24, var(--accent));
+  background-size: 200% 100%;
+  border-radius: 999px;
+  transition: width 0.55s cubic-bezier(0.4, 0.0, 0.2, 1);
+  box-shadow: 0 0 12px rgba(var(--t-accent-rgb),0.45);
 }
-
-/* Fill */
-.sc-track-fill {
-  position: absolute;
-  background: linear-gradient(135deg, #4f8ef7, #6c63ff);
-  border-radius: 6px;
-  width: 0; height: 0;
-  opacity: 0.7;
+.shade-card.sc-s-moving .sc-bar-fill {
+  animation: sc-bar-shimmer 1.6s ease-in-out infinite;
 }
-
-/* Labels */
-.sc-labels {
-  position: absolute;
-  font-size: 8px; font-weight: 600;
-  letter-spacing: 0.5px; text-transform: uppercase;
-  color: rgba(255,255,255,0.22);
-  font-family: 'JetBrains Mono', monospace;
-  pointer-events: none; user-select: none;
-}
-.sc-labels-vert {
-  display: flex; flex-direction: column;
-  justify-content: space-between;
-  height: 100%;
-  left: calc(50% + 16px); top: 0;
-}
-.sc-labels-horz {
-  display: flex; flex-direction: row;
-  justify-content: space-between;
-  width: 100%;
-  top: calc(50% + 18px); left: 0;
-  padding: 0 2px;
+@keyframes sc-bar-shimmer {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
 
-/* Thumb — the drag handle and STOP button */
-.sc-thumb {
-  position: absolute;
-  width: 52px; height: 52px;
-  border-radius: 50%;
-  background: linear-gradient(145deg, #1e2d4f, #1a2640);
-  border: 2px solid rgba(79,142,247,0.45);
-  box-shadow: 0 0 0 4px rgba(79,142,247,0.12), 0 6px 20px rgba(0,0,0,0.45);
+/* === Big action buttons === */
+.shade-card .sc-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.shade-card .sc-btn {
   display: flex; align-items: center; justify-content: center;
-  cursor: grab;
-  touch-action: none;
-  z-index: 2;
-  transition: box-shadow 0.18s, border-color 0.18s;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(var(--t-card2-rgb), 0.55);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  border-radius: 14px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 14px 6px;
+  min-height: 64px;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.18s, border-color 0.18s, transform 0.08s, box-shadow 0.18s;
+  position: relative;
+  overflow: hidden;
 }
-.sc-orient-vert .sc-thumb,
-.sc-orient-horz .sc-thumb {
-  left: 50%; top: 50%;
-  transform: translateX(-50%) translateY(-50%);
+.shade-card .sc-btn::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(80% 80% at 50% 0%, rgba(var(--t-overlay-rgb),0.10), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
 }
+.shade-card .sc-btn:hover::before { opacity: 1; }
+.shade-card .sc-btn:active        { transform: scale(0.96); }
+.shade-card .sc-btn-flash         { box-shadow: 0 0 0 3px rgba(var(--t-overlay-rgb),0.22); }
 
-.sc-thumb-label {
-  font-size: 9px; font-weight: 700;
-  letter-spacing: 1px; text-transform: uppercase;
-  color: rgba(255,255,255,0.55);
+.shade-card .sc-btn-ico {
+  font-size: 18px;
+  line-height: 1;
+  pointer-events: none;
+}
+.shade-card .sc-btn-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
   font-family: 'JetBrains Mono', monospace;
-  user-select: none; pointer-events: none;
+  pointer-events: none;
 }
 
-.sc-thumb.sc-thumb-active {
-  cursor: grabbing;
-  box-shadow: 0 0 0 6px rgba(79,142,247,0.20), 0 8px 28px rgba(0,0,0,0.55);
+/* Open / Stop / Close all share the same neutral chrome — no colour coding */
+.shade-card .sc-btn-open,
+.shade-card .sc-btn-stop,
+.shade-card .sc-btn-close {
+  border-color: rgba(var(--t-overlay-rgb),0.10);
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(var(--t-overlay-rgb),0.05), rgba(var(--t-overlay-rgb),0.02));
 }
-.sc-thumb.sc-thumb-toward-open {
-  border-color: rgba(34,211,165,0.6);
-  box-shadow: 0 0 0 5px rgba(34,211,165,0.15), 0 6px 22px rgba(0,0,0,0.45);
+.shade-card .sc-btn-open:hover,
+.shade-card .sc-btn-stop:hover,
+.shade-card .sc-btn-close:hover {
+  background: linear-gradient(180deg, rgba(var(--t-overlay-rgb),0.10), rgba(var(--t-overlay-rgb),0.04));
+  border-color: rgba(var(--t-overlay-rgb),0.22);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.30);
 }
-.sc-thumb.sc-thumb-toward-open .sc-thumb-label { color: #22d3a5; }
-.sc-thumb.sc-thumb-toward-close {
-  border-color: rgba(249,107,107,0.6);
-  box-shadow: 0 0 0 5px rgba(249,107,107,0.15), 0 6px 22px rgba(0,0,0,0.45);
-}
-.sc-thumb.sc-thumb-toward-close .sc-thumb-label { color: #f96b6b; }
 
-/* Hint row */
-.sc-hint-row {
-  display: flex; justify-content: space-between; align-items: center;
-}
-.sc-hint      { font-size: 9px; color: rgba(255,255,255,0.20); font-family: 'JetBrains Mono', monospace; }
-.sc-join-hint { font-size: 9px; color: rgba(255,255,255,0.15); font-family: 'JetBrains Mono', monospace; }
-
-/* Responsive */
-@media (max-width: 359px) { .shades-grid { grid-template-columns: 1fr 1fr; } }
-@media (min-width: 600px) { .shades-grid { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); } }
-@media (min-width: 1200px) { .shades-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); } }
+/* (.shades-grid responsive widths handled in the global RESPONSIVE BREAKPOINTS section above) */
 
 
+/* ═══════════════════════════════════════════════════════════════════════
+   CLIMATE WIDGET — AC  +  HEATER  (shared .ac-card layout)
+   ═══════════════════════════════════════════════════════════════════════ */
 
+.ac-subwidget            { display: none; }
+.ac-subwidget.active     { display: block; }
 
-/* ══════════════════════════════════════════════════════════════════════
-   AC WIDGET — Full Design (matching screenshot palette)
-   ══════════════════════════════════════════════════════════════════════ */
+.lights-subwidget        { display: none; }
+.lights-subwidget.active { display: block; }
 
 .ac-card {
-  background: linear-gradient(160deg, #131a2e 0%, #0f1622 100%);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 24px;
-  padding: clamp(16px, 3vw, 28px);
-  box-shadow: 0 12px 48px rgba(0,0,0,0.55);
-  margin-bottom: 20px;
+  position: relative;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(var(--t-accent-rgb),0.07), transparent 55%),
+    radial-gradient(120% 80% at 100% 100%, rgba(79,167,255,0.06), transparent 55%),
+    linear-gradient(145deg, var(--surface), var(--surface));
+  border: 1px solid var(--card-solid2);
+  border-radius: 22px;
+  padding: clamp(18px, 2.3vw, 28px);
+  display: flex; flex-direction: column;
+  gap: clamp(14px, 1.8vw, 22px);
+  transition: opacity 0.3s, border-color 0.3s, box-shadow 0.3s, filter 0.3s;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
 }
+.ac-card::before {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(var(--t-overlay-rgb),0.18), transparent);
+  pointer-events: none;
+}
+#ac-heater-page1 .ac-card {
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(255,143,60,0.07), transparent 55%),
+    radial-gradient(120% 80% at 100% 100%, rgba(255,91,60,0.06), transparent 55%),
+    linear-gradient(145deg, var(--surface), var(--surface));
+}
+.ac-card.ac-is-off {
+  opacity: 0.55;
+  filter: saturate(0.6);
+}
+.ac-card.ac-is-off::before { opacity: 0.3; }
 
-/* Top row */
+/* ── Top row: room info + power button ───────────────────────── */
 .ac-top-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
 }
 .ac-room-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: flex; align-items: center; gap: 14px; min-width: 0;
 }
 .ac-room-icon {
-  width: 38px; height: 38px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.09);
+  width: 44px; height: 44px;
+  border-radius: 14px;
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--card-solid2);
   display: flex; align-items: center; justify-content: center;
-  font-size: 18px;
+  font-size: 22px;
+  flex-shrink: 0;
 }
 .ac-room-name {
-  font-size: clamp(13px, 1.8vw, 16px);
+  font-size: clamp(15px, 1.4vw, 18px);
   font-weight: 700;
-  color: #e4e9f7;
+  color: var(--text);
   line-height: 1.2;
 }
 .ac-room-sub {
-  font-size: clamp(10px, 1.3vw, 12px);
-  color: #8fa3c8;
-  margin-top: 2px;
+  font-size: clamp(11px, 1vw, 13px);
+  color: var(--text2);
+  margin-top: 3px;
 }
 
-/* Power button */
 .ac-power-btn {
-  width: clamp(42px, 5vw, 52px);
-  height: clamp(42px, 5vw, 52px);
-  border-radius: 50%;
-  border: 2px solid rgba(34,211,165,0.5);
-  background: rgba(34,211,165,0.15);
-  color: #22d3a5;
+  position: relative;
+  width: 48px; height: 48px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent));
+  color: var(--bg);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: all 0.25s;
   flex-shrink: 0;
-  box-shadow: 0 0 16px rgba(34,211,165,0.2), inset 0 0 8px rgba(34,211,165,0.08);
+  box-shadow: 0 4px 14px rgba(var(--t-accent-rgb),0.35), 0 0 0 1px rgba(var(--t-overlay-rgb),0.06) inset;
+  transition: all 0.25s;
+  touch-action: manipulation;
 }
-.ac-power-btn svg {
-  width: clamp(18px, 2.2vw, 24px);
-  height: clamp(18px, 2.2vw, 24px);
+.ac-power-btn::after {
+  content: '';
+  position: absolute; inset: -3px;
+  border-radius: 16px;
+  background: radial-gradient(50% 50% at 50% 50%, rgba(var(--t-accent-rgb),0.5), transparent 70%);
+  opacity: 0.6;
+  z-index: -1;
+  transition: opacity 0.25s;
 }
-.ac-power-btn[data-on="false"] {
-  border-color: rgba(249,107,107,0.45);
-  background: rgba(249,107,107,0.12);
-  color: #f96b6b;
-  box-shadow: 0 0 16px rgba(249,107,107,0.18), inset 0 0 8px rgba(249,107,107,0.06);
+.ac-power-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(var(--t-accent-rgb),0.5), 0 0 0 1px rgba(var(--t-overlay-rgb),0.10) inset;
 }
-.ac-power-btn:hover { transform: scale(1.08); }
+.ac-power-btn:hover::after { opacity: 1; }
+.ac-power-btn svg { width: 24px; height: 24px; position: relative; z-index: 1; }
 .ac-power-btn:active { transform: scale(0.94); }
+.ac-power-btn[data-on="false"] {
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border-color: rgba(var(--t-overlay-rgb),0.10);
+  color: var(--text2);
+  box-shadow: none;
+}
+.ac-power-btn[data-on="false"]::after { opacity: 0; }
+.ac-power-btn[data-on="true"] {
+  animation: ac-power-pulse 3s ease-in-out infinite;
+}
+@keyframes ac-power-pulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(var(--t-accent-rgb),0.35), 0 0 0 1px rgba(var(--t-overlay-rgb),0.06) inset; }
+  50%      { box-shadow: 0 4px 22px rgba(var(--t-accent-rgb),0.55), 0 0 0 1px rgba(var(--t-overlay-rgb),0.10) inset; }
+}
+/* Heater variant — warm colour when ON */
+#ac-heater-page1 .ac-power-btn[data-on="true"] {
+  background: linear-gradient(135deg, #ff8f3c, #ff5b3c);
+  box-shadow: 0 4px 14px rgba(255,143,60,0.35), 0 0 0 1px rgba(var(--t-overlay-rgb),0.06) inset;
+  animation: ac-power-pulse-warm 3s ease-in-out infinite;
+}
+#ac-heater-page1 .ac-power-btn::after {
+  background: radial-gradient(50% 50% at 50% 50%, rgba(255,143,60,0.55), transparent 70%);
+}
+@keyframes ac-power-pulse-warm {
+  0%, 100% { box-shadow: 0 4px 14px rgba(255,143,60,0.35), 0 0 0 1px rgba(var(--t-overlay-rgb),0.06) inset; }
+  50%      { box-shadow: 0 4px 22px rgba(255,143,60,0.55), 0 0 0 1px rgba(var(--t-overlay-rgb),0.10) inset; }
+}
 
-/* Current temp row */
+/* ── Current (room) temperature pill ─────────────────────────── */
 .ac-current-temp-row {
-  margin-bottom: 10px;
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--card-solid);
+  border-radius: 14px;
 }
 .ac-current-label {
-  font-size: clamp(10px, 1.2vw, 12px);
-  color: rgba(255,255,255,0.35);
+  font-size: clamp(11px, 1vw, 13px);
+  color: var(--text2);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  display: block;
-  margin-bottom: 2px;
+  letter-spacing: 0.06em;
 }
 .ac-current-value {
-  font-size: clamp(36px, 6vw, 56px);
-  font-weight: 700;
-  color: #e4e9f7;
   font-family: 'JetBrains Mono', monospace;
-  line-height: 1;
+  font-size: clamp(22px, 2.4vw, 32px);
+  font-weight: 700;
+  color: var(--accent);
 }
+#ac-heater .ac-current-value { color: #ff8f3c; }
 
-/* Dial row */
+/* ── Big dial row: − [ SVG ] + ───────────────────────────────── */
 .ac-dial-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(12px, 3vw, 28px);
-  margin: 8px 0 20px;
-}
-
-/* Adjust buttons */
-.ac-adj-btn {
-  width: clamp(52px, 7vw, 68px);
-  height: clamp(52px, 7vw, 68px);
-  border-radius: 18px;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #e4e9f7;
-  font-size: clamp(24px, 3.5vw, 32px);
-  font-weight: 300;
-  cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: all 0.18s;
-  flex-shrink: 0;
-  touch-action: manipulation;
-  line-height: 1;
+  gap: clamp(10px, 1.8vw, 20px);
 }
-.ac-adj-btn:hover {
-  background: rgba(79,142,247,0.15);
-  border-color: rgba(79,142,247,0.4);
-  color: #4f8ef7;
-  transform: scale(1.06);
-}
-.ac-adj-btn:active { transform: scale(0.92); }
-
-/* Dial SVG */
 .ac-dial-wrap {
-  flex: 0 0 auto;
-  width: clamp(160px, 28vw, 240px);
-  height: clamp(160px, 28vw, 240px);
+  width: clamp(200px, 28vw, 280px);
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
   position: relative;
 }
-.ac-dial-svg {
-  width: 100%; height: 100%;
-  overflow: visible;
-}
+.ac-dial-svg     { width: 100%; height: 100%; display: block; }
 .ac-dial-temp {
   font-family: 'JetBrains Mono', monospace;
   font-size: 42px;
   font-weight: 700;
-  fill: #e4e9f7;
-  dominant-baseline: middle;
+  fill: var(--text);
 }
 .ac-dial-label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  fill: rgba(var(--t-overlay-rgb),0.35);
+  font-weight: 600;
+}
+
+/* ── The −  /  + setpoint buttons (the ones that "had no styling") ── */
+.ac-adj-btn {
+  width: clamp(52px, 6vw, 72px);
+  height: clamp(52px, 6vw, 72px);
+  border-radius: 50%;
+  border: 1px solid var(--card-solid2);
+  background: var(--surface);
+  color: #d8e3f2;
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 300;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.28);
+  transition: transform 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  touch-action: manipulation;
+  user-select: none;
+}
+.ac-adj-btn:hover {
+  background: rgba(var(--t-card-rgb), 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border-color: #4fa7ff;
+  color: var(--text);
+}
+.ac-adj-btn:active,
+.ac-adj-btn.ac-flash {
+  transform: scale(0.9);
+  background: linear-gradient(135deg, rgba(var(--t-accent-rgb),0.25), rgba(79,167,255,0.2));
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: 0 0 0 4px rgba(var(--t-accent-rgb),0.15), 0 6px 18px rgba(var(--t-accent-rgb),0.25);
+}
+.ac-card.ac-is-off .ac-adj-btn { pointer-events: none; opacity: 0.5; }
+
+#ac-heater .ac-adj-btn:active,
+#ac-heater .ac-adj-btn.ac-flash {
+  background: linear-gradient(135deg, rgba(255,143,60,0.25), rgba(255,91,60,0.2));
+  border-color: #ff8f3c;
+  box-shadow: 0 0 0 4px rgba(255,143,60,0.15), 0 6px 18px rgba(255,143,60,0.25);
+}
+
+/* ── Section headers (Mode / Fan Speed) ──────────────────────── */
+.ac-section-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 4px;
+}
+.ac-section-label {
+  font-size: clamp(12px, 1.1vw, 14px);
+  font-weight: 600;
+  color: #bcd0f0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Mode & Fan chip rows ────────────────────────────────────── */
+.ac-mode-row,
+.ac-fan-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 10px;
+}
+.ac-mode-btn,
+.ac-fan-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 10px 6px;
+  min-height: 58px;
+  border: 1px solid var(--card-solid2);
+  background: var(--surface);
+  color: #d8e3f2;
+  border-radius: 14px;
+  font-family: inherit;
+  font-size: clamp(11px, 1vw, 13px);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .15s, background .2s, border-color .2s, box-shadow .2s;
+  touch-action: manipulation;
+}
+.ac-mode-ico,
+.ac-fan-ico { font-size: 1.3em; line-height: 1; }
+.ac-mode-btn:active,
+.ac-fan-btn:active { transform: scale(0.97); }
+.ac-mode-btn:hover,
+.ac-fan-btn:hover {
+  background: linear-gradient(135deg, rgba(var(--t-overlay-rgb),0.04), rgba(var(--t-overlay-rgb),0.02));
+  border-color: rgba(var(--t-overlay-rgb),0.18);
+  color: var(--text);
+}
+.ac-mode-active {
+  background: linear-gradient(135deg, rgba(79,167,255,0.28), rgba(var(--t-accent-rgb),0.22));
+  border-color: #4fa7ff;
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(79,167,255,0.45) inset, 0 6px 22px rgba(79,167,255,0.25);
+  animation: ac-active-pop 0.35s ease-out;
+}
+.ac-fan-active {
+  background: linear-gradient(135deg, rgba(var(--t-accent-rgb),0.28), rgba(79,167,255,0.20));
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(var(--t-accent-rgb),0.45) inset, 0 6px 22px rgba(var(--t-accent-rgb),0.25);
+  animation: ac-active-pop 0.35s ease-out;
+}
+@keyframes ac-active-pop {
+  0%   { transform: scale(0.94); }
+  60%  { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+.ac-card.ac-is-off .ac-mode-btn,
+.ac-card.ac-is-off .ac-fan-btn { pointer-events: none; opacity: 0.55; }
+
+/* Responsive — collapse the dial row on small screens */
+@media (max-width: 480px) {
+  .ac-dial-row  { flex-direction: column; gap: 14px; }
+  .ac-dial-wrap { width: clamp(200px, 62vw, 260px); }
+  .ac-mode-row,
+  .ac-fan-row   { grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); }
+}
+/* ══════════════════════════════════════════════════════════════════════
+   HOME CONTROL BAR  &  HOME OVERLAY — four quick-launch buttons
+   that open full-screen modal overlays for Modes / Functions /
+   Shutdown / Weather.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 4-button quick-launch bar ───────────────────────────────────────── */
+.home-ctrl-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+/* Each home-control button uses a CSS variable for its accent colour
+   (--hcb-rgb) so the radial glow, top stripe, icon ring and hover glow all
+   stay in sync. The per-button modifier classes set --hcb-rgb only — the
+   rest of the styling is driven from the base .hcb-btn rule. */
+.hcb-btn {
+  --hcb-rgb: 143, 163, 200;          /* default neutral slate */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 8px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(var(--hcb-rgb), 0.30);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hcb-rgb), 0.18), transparent 60%),
+    linear-gradient(135deg, var(--card-solid2) 0%, var(--card-solid2) 50%, var(--card-solid2) 100%);
+  color: var(--text);
   font-family: 'Sora', sans-serif;
   font-size: 11px;
   font-weight: 600;
-  fill: rgba(255,255,255,0.38);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  dominant-baseline: middle;
-}
-
-/* Feedback flash on +/- */
-@keyframes acAdjFlash {
-  0%   { box-shadow: 0 0 0 0 rgba(79,142,247,0.6); }
-  100% { box-shadow: 0 0 0 12px rgba(79,142,247,0); }
-}
-.ac-adj-btn.ac-flash {
-  animation: acAdjFlash 0.35s ease-out;
-}
-
-/* Section label */
-.ac-section-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 10px;
-}
-.ac-section-label {
-  font-size: clamp(11px, 1.4vw, 13px);
-  font-weight: 600;
-  color: rgba(255,255,255,0.38);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-/* Mode row */
-.ac-mode-row {
-  display: flex;
-  gap: clamp(6px, 1vw, 10px);
-  flex-wrap: wrap;
-}
-.ac-mode-btn {
-  flex: 1 1 auto;
-  min-width: clamp(48px, 8vw, 72px);
-  padding: clamp(8px, 1.2vw, 12px) clamp(10px, 1.5vw, 18px);
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  border: 1.5px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.45);
-  font-family: 'Sora', sans-serif;
-  font-size: clamp(11px, 1.4vw, 13px);
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  cursor: pointer;
-  transition: all 0.2s;
-  touch-action: manipulation;
-  white-space: nowrap;
-}
-.ac-mode-btn:hover {
-  background: rgba(79,142,247,0.12);
-  border-color: rgba(79,142,247,0.4);
-  color: #4f8ef7;
-}
-.ac-mode-btn.ac-mode-active {
-  background: rgba(34,211,165,0.15);
-  border-color: rgba(34,211,165,0.55);
-  color: #22d3a5;
-  box-shadow: 0 0 14px rgba(34,211,165,0.15);
-}
-.ac-mode-btn:active { transform: scale(0.94); }
-
-/* Fan speed row */
-.ac-fan-row {
-  display: flex;
-  gap: clamp(6px, 1vw, 10px);
-}
-.ac-fan-btn {
-  flex: 1;
-  padding: clamp(8px, 1.2vw, 12px) 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  border: 1.5px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.45);
-  font-family: 'Sora', sans-serif;
-  font-size: clamp(11px, 1.4vw, 13px);
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  cursor: pointer;
-  transition: all 0.2s;
-  touch-action: manipulation;
-  white-space: nowrap;
+  line-height: 1.3;
   text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.2s, box-shadow 0.22s, background 0.22s;
+  touch-action: manipulation;
+  min-height: 92px;
+  box-shadow:
+    0 4px 18px rgba(0,0,0,0.4),
+    0 0 0 1px rgba(var(--t-overlay-rgb),0.04) inset;
+  overflow: hidden;
 }
-.ac-fan-btn:hover {
-  background: rgba(79,142,247,0.12);
-  border-color: rgba(79,142,247,0.4);
-  color: #4f8ef7;
-}
-.ac-fan-btn.ac-fan-active {
-  background: rgba(79,142,247,0.18);
-  border-color: rgba(79,142,247,0.6);
-  color: #4f8ef7;
-  box-shadow: 0 0 14px rgba(79,142,247,0.2);
-}
-.ac-fan-btn:active { transform: scale(0.94); }
 
-/* AC OFF state dims the whole card */
-.ac-card.ac-is-off .ac-dial-row,
-.ac-card.ac-is-off .ac-mode-row,
-.ac-card.ac-is-off .ac-fan-row {
-  opacity: 0.38;
+/* Top accent stripe — fades in on hover, fully visible on active overlay
+   (driven by the .hcb-active class added by openHomeOverlay_pageN). */
+.hcb-btn::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 12%; right: 12%;
+  height: 2px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg,
+              transparent 0%,
+              rgba(var(--hcb-rgb), 0.85) 50%,
+              transparent 100%);
+  opacity: 0;
+  transition: opacity 0.22s;
+  pointer-events: none;
+}
+/* Subtle wash that brightens on hover — sits above the gradient, below children. */
+.hcb-btn::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 100%, rgba(var(--hcb-rgb), 0.0), transparent 60%);
+  transition: background 0.25s;
   pointer-events: none;
 }
 
-/* Responsive */
-@media (max-width: 359px) {
-  .ac-mode-row { flex-wrap: wrap; }
-  .ac-mode-btn { min-width: 44px; font-size: 10px; }
-  .ac-fan-btn  { font-size: 10px; }
+.hcb-btn:hover {
+  transform: translateY(-3px);
+  border-color: rgba(var(--hcb-rgb), 0.65);
+  box-shadow:
+    0 8px 28px rgba(var(--hcb-rgb), 0.30),
+    0 4px 18px rgba(0,0,0,0.4),
+    0 0 0 1px rgba(var(--hcb-rgb), 0.18) inset;
+}
+.hcb-btn:hover::before { opacity: 1; }
+.hcb-btn:hover::after  { background: radial-gradient(circle at 50% 100%, rgba(var(--hcb-rgb), 0.10), transparent 60%); }
+.hcb-btn:active { transform: scale(0.96); transition: transform 0.08s; }
+.hcb-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(var(--hcb-rgb), 0.4),
+    0 4px 18px rgba(0,0,0,0.4);
+}
+
+/* Icon container — soft circular badge with the accent tint behind the emoji. */
+.hcb-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+  background: rgba(var(--hcb-rgb), 0.14);
+  border: 1px solid rgba(var(--hcb-rgb), 0.28);
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.4));
+  transition: background 0.22s, border-color 0.22s, transform 0.22s;
+  position: relative; z-index: 1;
+}
+.hcb-btn:hover .hcb-ico {
+  background: rgba(var(--hcb-rgb), 0.24);
+  border-color: rgba(var(--hcb-rgb), 0.55);
+  transform: scale(1.06);
+}
+.hcb-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(var(--t-overlay-rgb),0.92);
+  letter-spacing: 0.2px;
+  position: relative; z-index: 1;
+}
+
+/* Per-button accent colours — only the --hcb-rgb variable changes. */
+.hcb-modes     { --hcb-rgb:  var(--t-accent-rgb); }   /* green/teal */
+.hcb-functions { --hcb-rgb: 251, 191,  36; }   /* amber */
+.hcb-shutdown  { --hcb-rgb: 249, 107, 107; }   /* red */
+.hcb-weather   { --hcb-rgb:  var(--t-accent-rgb); }   /* teal */
+
+/* "Active" state added by openHomeOverlay_pageN to the button whose overlay
+   is currently shown — keeps the top stripe and accent glow lit. */
+.hcb-btn.hcb-active {
+  border-color: rgba(var(--hcb-rgb), 0.65);
+  box-shadow:
+    0 6px 22px rgba(var(--hcb-rgb), 0.28),
+    0 0 0 1px rgba(var(--hcb-rgb), 0.20) inset;
+}
+.hcb-btn.hcb-active::before { opacity: 1; }
+.hcb-btn.hcb-active .hcb-ico {
+  background: rgba(var(--hcb-rgb), 0.22);
+  border-color: rgba(var(--hcb-rgb), 0.55);
+}
+
+@media (max-width: 420px) {
+  .home-ctrl-bar { grid-template-columns: repeat(2, 1fr); }
+  .hcb-btn { min-height: 80px; }
+  .hcb-ico { width: 36px; height: 36px; font-size: 19px; }
+}
+
+/* ── Backdrop ────────────────────────────────────────────────────────── */
+.home-overlay-backdrop {
+  position: fixed; inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0);
+  pointer-events: none;
+  transition: background 0.3s;
+}
+.home-overlay-backdrop.open {
+  background: rgba(0,0,0,0.62);
+  pointer-events: all;
+}
+
+/* ── Overlay panel ───────────────────────────────────────────────────── */
+.home-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 201;
+  background: var(--bg2);
+  border-top: 1px solid rgba(var(--t-accent-rgb),0.22);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  /* Hidden state */
+  transform: translateY(100%);
+  transition: transform 0.38s cubic-bezier(0.32,0.72,0,1);
+  pointer-events: none;
+}
+.home-overlay.open {
+  transform: translateY(0);
+  pointer-events: all;
+}
+
+/* ── Top bar (title + close) ─────────────────────────────────────────── */
+.hov-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(var(--t-overlay-rgb),0.08);
+  flex-shrink: 0;
+  background: linear-gradient(180deg, var(--card-solid) 0%, transparent 100%);
+}
+.hov-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+.hov-close {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.12);
+  background: rgba(var(--t-overlay-rgb),0.06);
+  color: rgba(var(--t-overlay-rgb),0.55);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+  touch-action: manipulation;
+  flex-shrink: 0;
+}
+.hov-close:hover { background: rgba(249,107,107,0.18); border-color: rgba(249,107,107,0.4); color: #f96b6b; }
+
+/* ── Section container (scrollable) ─────────────────────────────────── */
+.hov-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--t-accent-rgb),0.3) transparent;
+}
+.hov-section::-webkit-scrollbar { width: 4px; }
+.hov-section::-webkit-scrollbar-thumb { background: rgba(var(--t-accent-rgb),0.3); border-radius: 4px; }
+
+.hov-desc {
+  font-size: 13px;
+  color: rgba(var(--t-overlay-rgb),0.45);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* ══ SECTION 1 — HOUSE MODES ══════════════════════════════════════════ */
+.hov-modes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+/* Each mode button uses a per-mode accent color via --hm-rgb so its hover
+   glow / active state matches the scene's mood (Morning=amber sunrise,
+   Guest=teal welcome, Night=indigo, Away=red caution, Party=purple,
+   Relax=warm amber). */
+.hov-mode-btn {
+  --hm-rgb: 143, 163, 200;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 22px 12px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hm-rgb), 0.10), transparent 65%),
+    rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.22s, background 0.22s, box-shadow 0.22s;
+  touch-action: manipulation;
+  min-height: 118px;
+  overflow: hidden;
+}
+/* Mode-specific accents — applied via data-mode="..." in markup. */
+.hov-mode-btn[data-mode="morning"] { --hm-rgb: 251, 191,  36; }   /* amber */
+.hov-mode-btn[data-mode="guest"]   { --hm-rgb:  var(--t-accent-rgb); }   /* teal */
+.hov-mode-btn[data-mode="night"]   { --hm-rgb:  79, 142, 247; }   /* indigo */
+.hov-mode-btn[data-mode="away"]    { --hm-rgb: 249, 107, 107; }   /* red */
+.hov-mode-btn[data-mode="party"]   { --hm-rgb: var(--t-accent2-rgb); }   /* purple */
+.hov-mode-btn[data-mode="relax"]   { --hm-rgb: 251, 146,  60; }   /* warm orange */
+
+.hov-mode-btn:hover {
+  border-color: rgba(var(--hm-rgb), 0.55);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hm-rgb), 0.20), transparent 65%),
+    rgba(var(--hm-rgb), 0.08);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(var(--hm-rgb), 0.24);
+}
+.hov-mode-btn:hover .hov-mode-ico { transform: scale(1.10); }
+.hov-mode-btn:active { transform: scale(0.95); transition: transform 0.08s; }
+.hov-mode-btn.hov-mode-active {
+  border-color: rgba(var(--hm-rgb), 0.70);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hm-rgb), 0.28), transparent 65%),
+    rgba(var(--hm-rgb), 0.12);
+  box-shadow:
+    0 0 0 2px rgba(var(--hm-rgb), 0.25) inset,
+    0 6px 22px rgba(var(--hm-rgb), 0.30);
+  color: rgb(var(--hm-rgb));
+}
+.hov-mode-btn.hov-mode-active::after {
+  content: '';
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--hm-rgb));
+  box-shadow: 0 0 8px rgba(var(--hm-rgb), 0.8);
+}
+
+.hov-mode-ico  {
+  font-size: 36px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,0.4));
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.hov-mode-lbl  { font-size: 13px; font-weight: 600; letter-spacing: 0.3px; }
+
+@media (max-width: 420px) {
+  .hov-modes-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 700px) {
+  .hov-modes-grid { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* ══ SECTION 2 — HOUSE FUNCTIONS ══════════════════════════════════════ */
+/* Per-floor block: holds 3 system chips. The accent stripe at the top edge
+   uses the teal/purple house theme so multiple floors stack with rhythm. */
+.hov-floor-block {
+  position: relative;
+  background:
+    radial-gradient(ellipse 60% 100% at 50% 0%, rgba(var(--t-accent-rgb),0.06), transparent 70%),
+    rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.09);
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.hov-floor-block::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 12%; right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(var(--t-accent-rgb),0.45), transparent);
+  pointer-events: none;
+}
+.hov-floor-label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: 0.3px;
+}
+.hov-floor-ico {
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(var(--t-accent-rgb),0.10);
+  border: 1px solid rgba(var(--t-accent-rgb),0.25);
+}
+
+.hov-sys-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+/* Each system chip uses --hsc-rgb for accent (lights=amber, ac=blue,
+   shades=teal). Subtle radial glow + colored border on hover. */
+.hov-sys-chip {
+  --hsc-rgb: 143, 163, 200;
+  position: relative;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hsc-rgb), 0.10), transparent 70%),
+    rgba(var(--t-overlay-rgb),0.04);
+  border: 1px solid rgba(var(--hsc-rgb), 0.22);
+  border-radius: 14px;
+  padding: 14px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  transition: border-color 0.2s, background 0.2s, transform 0.18s;
+}
+.hov-sys-chip:hover {
+  border-color: rgba(var(--hsc-rgb), 0.45);
+  transform: translateY(-1px);
+}
+/* Per-system accent colors (driven by chip order in .hov-sys-row:
+   Lights / AC / Shades). */
+.hov-sys-chip:nth-child(1) { --hsc-rgb: 251, 191,  36; }   /* lights – amber */
+.hov-sys-chip:nth-child(2) { --hsc-rgb:  79, 142, 247; }   /* ac – blue */
+.hov-sys-chip:nth-child(3) { --hsc-rgb:  var(--t-accent-rgb); }   /* shades – teal */
+
+.hov-sys-ico  {
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+ 
+  border-radius: 50%;
+  background: rgba(var(--hsc-rgb), 0.12);
+  border: 1px solid rgba(var(--hsc-rgb), 0.28);
+}
+.hov-sys-name {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: rgba(var(--t-overlay-rgb),0.85);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.hov-sys-btns { display: flex; gap: 6px; margin-top: 6px; width: 100%; justify-content: center; }
+
+.hov-on-btn, .hov-off-btn {
+  flex: 1;
+  max-width: 72px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, transform 0.1s, box-shadow 0.18s;
+  touch-action: manipulation;
+  font-family: 'Sora', sans-serif;
+}
+.hov-on-btn  {
+  background: rgba(var(--t-accent-rgb),0.18);
+  color: var(--accent);
+  border: 1px solid rgba(var(--t-accent-rgb),0.40);
+}
+.hov-off-btn {
+  background: rgba(249,107,107,0.14);
+  color: #f96b6b;
+  border: 1px solid rgba(249,107,107,0.35);
+}
+.hov-on-btn:hover  {
+  background: rgba(var(--t-accent-rgb),0.30);
+  border-color: rgba(var(--t-accent-rgb),0.65);
+  box-shadow: 0 3px 12px rgba(var(--t-accent-rgb),0.22);
+}
+.hov-off-btn:hover {
+  background: rgba(249,107,107,0.26);
+  border-color: rgba(249,107,107,0.60);
+  box-shadow: 0 3px 12px rgba(249,107,107,0.22);
+}
+.hov-on-btn:active, .hov-off-btn:active { transform: scale(0.92); }
+
+@media (max-width: 480px) {
+  .hov-sys-row { grid-template-columns: 1fr; gap: 8px; }
+  .hov-sys-chip { flex-direction: row; justify-content: flex-start; align-items: center; gap: 12px; padding: 10px 14px; }
+  .hov-sys-chip .hov-sys-name { flex: 1; text-align: left; }
+  .hov-sys-btns { width: auto; margin-top: 0; }
+}
+
+/* ══ SECTION 3 — SHUTDOWN ═════════════════════════════════════════════ */
+.hov-sd-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.hov-sd-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 8px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(249,107,107,0.22);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(249,107,107,0.10), transparent 70%),
+    rgba(249,107,107,0.05);
+  color: #f4c7c7;
+  font-family: 'Sora', sans-serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.2s, background 0.2s, box-shadow 0.22s;
+  touch-action: manipulation;
+  overflow: hidden;
+}
+.hov-sd-btn span:first-child {
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(249,107,107,0.12);
+  border: 1px solid rgba(249,107,107,0.28);
+  transition: background 0.2s, border-color 0.2s, transform 0.2s;
+}
+.hov-sd-btn:hover {
+  background:
+    radial-gradient(circle at 50% 0%, rgba(249,107,107,0.20), transparent 65%),
+    rgba(249,107,107,0.14);
+  border-color: rgba(249,107,107,0.55);
+  color: #f96b6b;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(249,107,107,0.22);
+}
+.hov-sd-btn:hover span:first-child {
+  background: rgba(249,107,107,0.25);
+  border-color: rgba(249,107,107,0.55);
+  transform: scale(1.06);
+}
+.hov-sd-btn:active { transform: scale(0.94); transition: transform 0.08s; }
+
+@media (max-width: 480px) {
+  .hov-sd-row { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Whole-house per-system block — sits between the per-floor blocks and
+ * the master "SHUTDOWN ALL SYSTEMS" button, with a stronger red-tinted
+ * border so it reads as "broader than one floor, narrower than master". */
+.hov-allsys-block {
+  position: relative;
+  border: 1px solid rgba(249,107,107,0.32);
+  background:
+    radial-gradient(ellipse 80% 100% at 50% 0%, rgba(249,107,107,0.10), transparent 70%),
+    rgba(249,107,107,0.05);
+  border-radius: 16px;
+  padding: 16px;
+  margin-top: 20px;
+  overflow: hidden;
+}
+.hov-allsys-block::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 8%; right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(249,107,107,0.65), transparent);
+  pointer-events: none;
+}
+.hov-allsys-block .hov-floor-label { color: #f96b6b; }
+.hov-allsys-block .hov-floor-ico {
+  background: rgba(249,107,107,0.14);
+  border-color: rgba(249,107,107,0.35);
+}
+.hov-allsys-row .hov-sd-btn { border-color: rgba(249,107,107,0.40); }
+
+.hov-master-shutdown {
+  margin-top: 24px;
+  display: flex;
+  justify-content: center;
+  padding: 0 4px;
+}
+/* The master "kill switch" — the only button that pulses ALL_SYSTEMS.
+   Made unmistakably destructive: red gradient, inner ring, pulsing glow on
+   hover, and an icon set off in its own circle. */
+.hov-master-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 18px 44px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(249,107,107,0.60);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(249,107,107,0.25), transparent 70%),
+    linear-gradient(135deg, rgba(249,107,107,0.20), rgba(220,38,38,0.14));
+  color: #fecaca;
+  font-family: 'Sora', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              background 0.25s, border-color 0.25s, box-shadow 0.3s;
+  touch-action: manipulation;
+  box-shadow:
+    0 6px 22px rgba(249,107,107,0.25),
+    0 0 0 1px rgba(249,107,107,0.10) inset;
+  overflow: hidden;
+}
+.hov-master-btn span {
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(249,107,107,0.30);
+  border: 1px solid rgba(249,107,107,0.55);
+  transition: background 0.22s, border-color 0.22s, transform 0.22s;
+}
+.hov-master-btn:hover {
+  background:
+    radial-gradient(circle at 50% 0%, rgba(249,107,107,0.40), transparent 70%),
+    linear-gradient(135deg, rgba(249,107,107,0.32), rgba(220,38,38,0.22));
+  border-color: rgba(249,107,107,0.85);
+  color: var(--text);
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 30px rgba(249,107,107,0.45),
+    0 0 0 2px rgba(249,107,107,0.20) inset;
+}
+.hov-master-btn:hover span {
+  background: rgba(249,107,107,0.55);
+  border-color: rgba(249,107,107,0.85);
+  transform: scale(1.08);
+}
+.hov-master-btn:active { transform: scale(0.97); transition: transform 0.08s; }
+.hov-master-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(249,107,107,0.45),
+    0 6px 22px rgba(249,107,107,0.25);
+}
+
+/* ══ SECTION 4 — WEATHER ══════════════════════════════════════════════ */
+.hov-weather-card {
+  background: linear-gradient(135deg, var(--card-solid2) 0%, var(--card-solid2) 60%, var(--card-solid2) 100%);
+  border: 1px solid rgba(var(--t-accent-rgb),0.28);
+  border-radius: 22px;
+  padding: 28px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+}
+.hov-wx-icon { font-size: 64px; line-height: 1; filter: drop-shadow(0 4px 14px rgba(251,191,36,0.4)); }
+.hov-wx-main { text-align: center; }
+.hov-wx-temp { font-size: 48px; font-weight: 700; color: var(--text); font-family: 'JetBrains Mono', monospace; line-height: 1; }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   MUSIC WIDGET (page1)
+   Layout:
+     • .music-card                 — rounded panel that hosts everything
+     • .music-airplay-btn          — large pill-shaped Air Play button,
+                                     sits centred at the top of the card
+     • .music-controls-grid        — 4-column row of square buttons below
+     • .music-ctrl-btn             — Vol+, Vol−, Mute, Power Off
+   ══════════════════════════════════════════════════════════════════════ */
+
+#widget-music-page9.active {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px;
+  gap: 10px;
+}   
+.music-card-label {
+  font-family: 'Sora', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: rgba(var(--t-accent2-rgb), 0.85);
+  margin-bottom: 4px;
+}
+
+.music-card {
+  background:
+    linear-gradient(160deg, rgba(var(--t-accent2-rgb), 0.12) 0%, rgba(var(--t-accent-rgb), 0.10) 100%),
+    rgba(var(--t-card-rgb), 0.55);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(var(--t-accent2-rgb), 0.22);
+  border-radius: 22px;
+  padding: 32px 22px 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(var(--t-accent-rgb), 0.06) inset;
+}
+
+/* ── Centred Air Play button ──────────────────────────────────── */
+.music-airplay-btn {
+  width: clamp(180px, 60%, 260px);
+  min-height: 92px;
+  border-radius: 22px;
+  border: 1.5px solid rgba(var(--t-accent-rgb),0.45);
+  background: radial-gradient(circle at 50% 30%,
+                              rgba(var(--t-accent-rgb),0.30),
+                              rgba(var(--t-accent-rgb),0.12) 70%,
+                              rgba(var(--t-card-rgb),1)     100%);
+  color: #99b2f7;
+  font-family: 'Sora', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: transform 0.18s, box-shadow 0.22s, background 0.22s,
+              border-color 0.22s;
+  touch-action: manipulation;
+  box-shadow: 0 4px 22px rgba(var(--t-accent-rgb),0.25),
+              inset 0 0 18px rgba(var(--t-accent-rgb),0.18);
+}
+.music-airplay-ico { font-size: 30px; line-height: 1; }
+.music-airplay-lbl { font-size: 16px; }
+.music-airplay-btn:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--t-accent-rgb),0.75);
+  box-shadow: 0 6px 28px rgba(var(--t-accent-rgb),0.45),
+              inset 0 0 22px rgba(var(--t-accent-rgb),0.28);
+}
+.music-airplay-btn:active { transform: scale(0.97); }
+
+/* ── 4-button control row ──────────────────────────────────────── */
+.music-controls-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.music-ctrl-btn {
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  background: var(--card-solid);
+  color: #c8d0e3;
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(11px, 1.4vw, 13px);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.18s, background 0.22s, border-color 0.22s,
+              color 0.22s, box-shadow 0.22s;
+  touch-action: manipulation;
+}
+.music-ctrl-ico { font-size: clamp(18px, 2.4vw, 22px); line-height: 1; }
+.music-ctrl-lbl { line-height: 1.2; }
+.music-ctrl-btn:hover  { transform: translateY(-2px); }
+.music-ctrl-btn:active { transform: scale(0.94); }
+
+/* Per-button hover tints — green up, blue down, amber mute, red power. */
+.music-ctrl-btn.music-volup:hover {
+  background: rgba(var(--t-accent-rgb),0.13);
+  border-color: rgba(var(--t-accent-rgb),0.40);
+  color: var(--accent);
+  box-shadow: 0 4px 18px rgba(var(--t-accent-rgb),0.22);
+}
+.music-ctrl-btn.music-voldown:hover {
+  background: rgba(var(--t-accent-rgb),0.13);
+  border-color: rgba(var(--t-accent-rgb),0.40);
+  color: var(--accent);
+  box-shadow: 0 4px 18px rgba(var(--t-accent-rgb),0.22);
+}
+.music-ctrl-btn.music-mute:hover {
+  background: rgba(251,191,36,0.13);
+  border-color: rgba(251,191,36,0.40);
+  color: #fbbf24;
+  box-shadow: 0 4px 18px rgba(251,191,36,0.22);
+}
+.music-ctrl-btn.music-mute.music-active {
+  background: rgba(251, 191, 36, 0.20);
+  border-color: rgba(251, 191, 36, 0.70);
+  color: #fbbf24;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.38), 0 4px 14px rgba(251, 191, 36, 0.24);
+}
+.music-ctrl-btn.music-power:hover {
+  background: rgba(249,107,107,0.13);
+  border-color: rgba(249,107,107,0.40);
+  color: #f96b6b;
+  box-shadow: 0 4px 18px rgba(249,107,107,0.22);
+}
+
+/* Narrow phones — keep 4 columns but tighten things up. */
+@media (max-width: 380px) {
+  .music-card           { padding: 24px 14px 18px; gap: 20px; }
+  .music-airplay-btn    { width: 100%; min-height: 80px; font-size: 14px; }
+  .music-airplay-ico    { font-size: 26px; }
+  .music-ctrl-btn       { min-height: 60px; padding: 8px 4px; }
+}
+
+/* ============================================================================
+ * MODERNIZATION LAYER (appended)
+ *
+ * Additive rules only — nothing above this block changes.
+ * Every rule below is keyed on a class introduced in the modernized HTML
+ * (.svg-ico, .topbar, .room-tag, .conn-dot, .seg-pair, etc.) so it can
+ * coexist with the legacy markup until the migration finishes.
+ * ============================================================================ */
+
+/* ── Shutdown-all button (replaces the .conn indicator on every topbar) ─
+   Compact pill on the right edge of every topbar that pulses
+   JHOME.SHUTDOWN.ALL_SYSTEMS via the shared window.shutdownAll handler.
+   Red theme so it reads as destructive even at a glance. */
+.shutdown-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(249,107,107,0.42);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(249,107,107,0.20), transparent 70%),
+    rgba(249,107,107,0.06);
+  color: #f96b6b;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+  flex-shrink: 0;
+  touch-action: manipulation;
+  transition: transform .15s, background .18s, border-color .18s, box-shadow .22s, color .15s;
+}
+.shutdown-all .svg-ico { font-size: 14px; line-height: 0; }
+.shutdown-all:hover {
+  background: rgba(249,107,107,0.20);
+  border-color: rgba(249,107,107,0.85);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(249,107,107,0.32);
+}
+.shutdown-all:active { transform: scale(0.96); }
+.shutdown-all:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(249,107,107,0.42);
+}
+
+/* On narrow panels, hide the label and keep just the icon. */
+@media (max-width: 480px) {
+  .shutdown-all { padding: 6px 10px; }
+  .shutdown-all .shutdown-all-lbl { display: none; }
+}
+
+/* ── Back-to-home button (room topbars) ──────────────────────────────────
+   Compact icon button on the left edge of each room's topbar so users can
+   return to the hub from any page without reaching for the footer nav.
+   Uses the per-room accent so the button feels like part of the room. */
+.back-home {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--room-rgb), 0.28);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--room-rgb), 0.18), transparent 70%),
+    rgba(var(--t-overlay-rgb),0.04);
+  color: rgb(var(--room-rgb));
+  cursor: pointer;
+  flex-shrink: 0;
+  touch-action: manipulation;
+  transition: transform .15s, background .18s, border-color .18s, box-shadow .22s;
+}
+.back-home:hover {
+  transform: translateX(-2px);
+  border-color: rgba(var(--room-rgb), 0.62);
+  background: rgba(var(--room-rgb), 0.14);
+  box-shadow: 0 4px 14px rgba(var(--room-rgb), 0.28);
+}
+.back-home:active { transform: scale(0.94); }
+.back-home:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(var(--room-rgb), 0.42);
+}
+.back-home .svg-ico { font-size: 17px; line-height: 0; }
+
+/* When the topbar contains a back-home button, give it a 3-column layout
+   so the button sits on the left, the room tag in the middle, and the
+   conn pill on the right. */
+.topbar:has(.back-home) {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ── Room-page top breathing room ────────────────────────────────────────
+   The original .page-wrap had no top padding, so the topbar sat flush
+   against the shell's content edge. Add a clamped top inset on room
+   pages (page1 - page9) only — the home hub has its own hero/spacing
+   and does not need this. The selector is restricted to ids that start
+   with "page" so #home-page is excluded automatically. */
+[id^="page"][id$="-page"] .page-wrap {
+  padding-top: clamp(20px, 3.5vh, 36px);
+}
+
+/* ── Lights areas grid — one row per area, 4 inline buttons per row ─── */
+.lights-areas-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.area-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(var(--t-overlay-rgb),0.03);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.06);
+  min-height: 52px;
+  transition: background .18s, border-color .18s;
+}
+.area-row:hover {
+  background: rgba(var(--t-overlay-rgb),0.05);
+  border-color: rgba(var(--t-overlay-rgb),0.10);
+}
+.area-row-name {
+  flex: 0 0 110px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.2px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.area-row-btns {
+  display: flex;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  flex: 1 1 auto;
+}
+.area-btn {
+  --ab-rgb: 143, 163, 200;        /* default neutral; per-action override below */
+  padding: 7px 6px;
+  min-height: 34px;
+  width: 100% !important;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--ab-rgb), 0.28);
+  background: rgba(var(--ab-rgb), 0.06);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background .15s, border-color .15s, color .15s, transform .08s;
+  white-space: nowrap;
+}
+/* All area presets share the active theme's accent — no per-action
+   orange/red/amber colour coding. Hover + .ab-active feedback below
+   read from --ab-rgb, so the feedback colour follows the theme. */
+.ab-on,
+.ab-dim,
+.ab-relax,
+.ab-off   { --ab-rgb: var(--t-accent-rgb); }
+.area-btn:hover {
+  background: rgba(var(--ab-rgb), 0.18);
+  border-color: rgba(var(--ab-rgb), 0.65);
+  color: var(--text);
+}
+.area-btn:active { transform: scale(0.95); }
+.area-btn.ab-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: 0 4px 16px rgba(var(--t-accent-rgb), 0.32);
+}
+.area-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--ab-rgb), 0.55);
+}
+
+/* Responsive — stack on narrow panels: name on top row, buttons below. */
+@media (max-width: 520px) {
+  .area-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .area-row-name {
+    flex: 0 0 auto;
+    text-align: left;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text2);
+  }
+  .area-btn { font-size: 10px; padding: 6px 4px; }
+}
+
+/* ── Lone Weather button — auto-fit so a single .hcb-btn child stretches
+   to a sensible width instead of sitting in a 1/4 grid slot.
+   Modes / Functions / Shutdown were moved to the Home Hub; only Weather
+   remains in the room pages' .home-ctrl-bar. */
+.home-ctrl-bar { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important; }
+.home-ctrl-bar > .hcb-btn:only-child {
+  max-width: 360px;
+  justify-self: center;
+  width: 100%;
+}
+
+/* ── Shutdown House: neutral until hover ───────────────────────────────────
+   Original .hcb-shutdown set --hcb-rgb to red (249,107,107), which painted
+   the destructive button alarming-red at rest. We now keep it neutral
+   slate at rest and flip --hcb-rgb to red only on :hover and on focus.
+   All the .hcb-btn rules (border, glow, icon ring, focus ring) consume
+   --hcb-rgb via rgba() so changing the variable retints everything in
+   one go — no rule duplication. */
+.hcb-btn.hcb-shutdown                  { --hcb-rgb: 143, 163, 200; }   /* slate, neutral */
+.hcb-btn.hcb-shutdown:hover,
+.hcb-btn.hcb-shutdown:focus-visible,
+.hcb-btn.hcb-shutdown.hcb-active       { --hcb-rgb: 249, 107, 107; }   /* red, danger */
+
+/* ── Per-room accent (one variable per page) ────────────────────────────────
+   Each #page<N>-page sets its own accent which the bg-mesh, status badge
+   and a few highlight rings consume via rgba(var(--room-rgb), …). The
+   default already in :root keeps non-modernized pages on the original
+   purple/teal aurora. */
+:root {
+  --room-rgb: var(--t-accent2-rgb);          /* purple — fallback */
+  --room-rgb-2: var(--t-accent-rgb);         /* teal — fallback secondary */
+}
+#page1-page { --room-rgb: var(--t-accent2-rgb); --room-rgb-2:  var(--t-accent-rgb); }  /* Master Bedroom — purple/teal */
+#page2-page { --room-rgb: 251, 146,  60; --room-rgb-2: 251, 191,  36; }  /* Living Room — warm orange/amber */
+#page3-page { --room-rgb:  79, 142, 247; --room-rgb-2: var(--t-accent2-rgb); }  /* Reception — indigo/purple */
+#page4-page { --room-rgb: 251, 191,  36; --room-rgb-2: 249, 107, 107; }  /* Kitchen — amber/red */
+#page5-page { --room-rgb: 244, 114, 182; --room-rgb-2: var(--t-accent2-rgb); }  /* Dining — pink/purple */
+#page6-page { --room-rgb:  var(--t-accent-rgb); --room-rgb-2:  79, 142, 247; }  /* Office — teal/blue */
+#page7-page { --room-rgb: 134, 239, 172; --room-rgb-2:  var(--t-accent-rgb); }  /* Guest — mint/teal */
+#page8-page { --room-rgb:  56, 189, 248; --room-rgb-2: var(--t-accent2-rgb); }  /* Bathroom — sky/purple */
+#page9-page { --room-rgb:  34, 197,  94; --room-rgb-2: 134, 239, 172; }  /* Garden — green/mint */
+
+/* When a #page<N>-page wrapper is present, retint the bg-mesh aurora to
+   match. The original .bg-mesh rule (purple/teal) stays as the fallback
+   for the splash screen and any unscoped context. */
+#page1-page ~ .bg-mesh,
+#page2-page ~ .bg-mesh,
+#page3-page ~ .bg-mesh,
+#page4-page ~ .bg-mesh,
+#page5-page ~ .bg-mesh,
+#page6-page ~ .bg-mesh,
+#page7-page ~ .bg-mesh,
+#page8-page ~ .bg-mesh,
+#page9-page ~ .bg-mesh { /* no-op selector — kept for future use; per-room tint
+                           is applied via the .bg-mesh--room rule below */ }
+.bg-mesh--room {
+  background:
+    radial-gradient(ellipse 640px 420px at 8% 0%,    rgba(var(--room-rgb),    0.20) 0%, transparent 62%),
+    radial-gradient(ellipse 540px 420px at 95% 100%, rgba(var(--room-rgb-2),  0.16) 0%, transparent 62%),
+    radial-gradient(ellipse 380px 280px at 50% 45%,  rgba(99, 102, 241, 0.10) 0%, transparent 70%),
+    var(--bg);
+}
+
+/* ── Inline SVG icon wrapper ───────────────────────────────────────────────
+   Replaces emoji glyphs everywhere. Gives a consistent stroke weight,
+   colour-as-text, and predictable rendering on every Crestron panel OS. */
+.svg-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.svg-ico svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+.svg-ico--filled svg { fill: currentColor; stroke: none; }
+.svg-ico--lg svg { width: 1.4em; height: 1.4em; }
+
+/* ── New top bar (replaces fake phone status bar) ───────────────────────────
+   Room name + live connection dot. Honest, useful, room-aware. */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0 6px;
+  padding-top: max(12px, env(safe-area-inset-top));
+}
+.room-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(var(--room-rgb), 0.10);
+  border: 1px solid rgba(var(--room-rgb), 0.28);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+.room-tag .svg-ico { color: rgb(var(--room-rgb)); font-size: 14px; }
+.room-tag .room-tag-name { white-space: nowrap; }
+
+/* Live connection indicator — green = connected, red = disconnected,
+   amber = reconnecting. The page1.js tick logic flips the modifier class. */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(var(--t-overlay-rgb),0.04);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.08);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text2);
+  text-transform: uppercase;
+}
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text2);
+  box-shadow: 0 0 0 0 rgba(148,163,200,0.5);
+}
+.conn--ok       .conn-dot { background: var(--accent); box-shadow: 0 0 8px rgba(var(--t-accent-rgb),0.6); animation: connPulse 2.4s ease-in-out infinite; }
+.conn--ok       { color: var(--accent); border-color: rgba(var(--t-accent-rgb),0.28); background: rgba(var(--t-accent-rgb),0.08); }
+.conn--warn     .conn-dot { background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,0.55); }
+.conn--warn     { color: #fbbf24; border-color: rgba(251,191,36,0.28); background: rgba(251,191,36,0.08); }
+.conn--bad      .conn-dot { background: #f96b6b; box-shadow: 0 0 8px rgba(249,107,107,0.55); }
+.conn--bad      { color: #f96b6b; border-color: rgba(249,107,107,0.28); background: rgba(249,107,107,0.08); }
+@keyframes connPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--t-accent-rgb),0.6); }
+  50%      { box-shadow: 0 0 0 6px rgba(var(--t-accent-rgb),0);   }
+}
+
+/* ── Segmented ON/OFF pair (visual unification, behaviour unchanged) ────────
+   Each .seg-pair holds the existing .hov-on-btn + .hov-off-btn unchanged —
+   only the wrapper is new. Both buttons keep firing their own pulse joins,
+   so we don't lie about state in the absence of feedback joins. */
+.seg-pair {
+  display: inline-flex !important;
+  gap: 0 !important;                /* override .hov-sys-btns gap when both classes present */
+  width: 100% !important;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(var(--t-overlay-rgb),0.04);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.10);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  isolation: isolate;
+}
+.seg-pair > button {
+  flex: 1 1 50%;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--text2) !important;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 10px 14px;
+  min-height: 38px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.08s;
+  position: relative;
+}
+.seg-pair > button + button {
+  border-left: 1px solid rgba(var(--t-overlay-rgb),0.08) !important;
+}
+.seg-pair > button:hover { background: rgba(var(--t-overlay-rgb),0.06) !important; color: var(--text) !important; }
+.seg-pair > .hov-on-btn:hover  { color: var(--accent) !important; background: rgba(var(--t-accent-rgb),0.10) !important; }
+.seg-pair > .hov-off-btn:hover { color: #f96b6b !important; background: rgba(249,107,107,0.10) !important; }
+.seg-pair > button:active { transform: scale(0.97); }
+.seg-pair > .hov-on-btn:active  { background: rgba(var(--t-accent-rgb),0.22) !important; color: var(--accent) !important; }
+.seg-pair > .hov-off-btn:active { background: rgba(249,107,107,0.22) !important; color: #f96b6b !important; }
+
+/* ── Universal tap feedback (CH5 panel feel) ───────────────────────────────
+   The CrComLib round-trip is 50–150 ms. Adding instant local visual
+   feedback on every interactive element makes the UI feel snappy even
+   while we wait for the join confirmation to come back.
+   We deliberately DO NOT override transforms on elements that already
+   have their own .…:active rule (those are keyed by selector specificity
+   and stay). This rule is the safety net for anything we forgot. */
+button:not([disabled]),
+[role="button"],
+[onclick] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Touch-target safety net ───────────────────────────────────────────────
+   Crestron TSW finger taps need 44px+ targets. Anything we forgot below
+   that gets a min size + a small invisible expansion via padding. We do
+   NOT touch the status-bar icons (those become non-interactive in the
+   modernized topbar). */
+.hov-on-btn,
+.hov-off-btn,
+.ash-btn,
+.area-shutdown-btn,
+.hov-mode-btn {
+  min-height: 44px;
+}
+
+/* ── Modernized greeting (real room name, no fake device count) ─────────── */
+.greeting--modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0 18px;
+}
+.greeting--modern .gr-icon {
+  width: 44px; height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #fff;
+  background: linear-gradient(135deg, rgb(var(--room-rgb)) 0%, rgb(var(--room-rgb-2)) 100%);
+  box-shadow:
+    0 4px 16px rgba(var(--room-rgb), 0.32),
+    0 0 0 1px rgba(var(--t-overlay-rgb),0.08) inset;
+  flex-shrink: 0;
+}
+.greeting--modern .gr-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.greeting--modern .gr-room {
+  font-size: clamp(18px, 3.2vw, 22px);
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+.greeting--modern .gr-sub {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 2px;
+  font-weight: 500;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   TV / MUSIC REFINEMENTS  (appended — applies to every page via shared CSS)
+     1. Uniform d-pad arrows — all four directions use ONE glyph rotated,
+        so ◀ ▶ match ▲ ▼ exactly (the raw left/right triangles render at a
+        different weight/size than up/down in Chromium).
+     2. Light-theme text — buttons whose colour was hardcoded for the dark
+        UI get readable near-black text on the white theme.
+     3. Unified press feedback — d-pad / media / power / music buttons get
+        a clear accent flash on tap, like pressing a widget tab.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Uniform d-pad arrows (TV remote + OSN/BeIN/Freesat remotes) ───── */
+.dpad-up, .dpad-down, .dpad-left, .dpad-right {
+  font-size: 0;                       /* hide the raw HTML glyph */
+}
+.dpad-up::after, .dpad-down::after,
+.dpad-left::after, .dpad-right::after {
+  content: '\25B2';                   /* ▲ — one glyph drives all four */
+  font-size: clamp(20px, 4.5vw, 28px);
+  line-height: 1;
+  display: block;
+}
+.dpad-down::after  { transform: rotate(180deg); }
+.dpad-left::after  { transform: rotate(270deg); }
+.dpad-right::after { transform: rotate(90deg); }
+
+/* ── 2. Light-theme readable button text ─────────────────────────────── */
+[data-theme="light"] {
+  .tv-power-btn,
+  .dpad-btn,
+  .keypad-btn,
+  .media-btn,
+  .music-ctrl-btn,
+  .music-airplay-btn,
+  .qbtn.app-launcher {
+    color: #18181b;
+  }
+  [id^="tvKeyEnter"],  [id^="appKeyEnter"],
+  [id^="tvBack"],      [id^="tvHome"],   [id^="tvMenu"],
+  [id^="tvChList"],    [id^="tvExit"],
+  [id^="appBack"],     [id^="appHome"],  [id^="appMenu"],
+  [id^="appLaunchBtn"],[id^="appKeyExit"] {
+    color: #18181b;
+  }
+}
+
+/* ── 3. Unified press feedback — accent flash on tap ─────────────────── */
+.dpad-btn:active:not(.dpad-center),
+.media-btn:active,
+.tv-power-btn:active,
+.music-ctrl-btn:active,
+.music-airplay-btn:active {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: 0 4px 18px rgba(var(--t-accent-rgb), 0.45);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   THEME-COHESIVE POPUPS  &  TOPBAR  (light / dark only — blue keeps its
+   original per-mode / per-room tints)
+     • House-Modes confirm popup        (.hmc-*)   — recolour from mode tint
+                                                     to theme accent
+     • Lights "individuals" channel popup (.area-panel + .ch-*) — recolour
+                                                     dim slider chrome &
+                                                     fix light-theme text
+     • Shutdown-All confirm popup       (.ash-*)   — recolour red chrome &
+                                                     fix light-theme text
+     • Topbar room-tag + greeting icon  (.room-tag / .gr-icon) — uniform
+                                                     theme-accent tint
+       across every room page (blue in light, amber in dark).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* The mode dialog's accent is fed by --hmc-rgb (set inline by home.js to
+   each mode's bespoke colour). Inline custom-property declarations beat
+   plain selectors, so we use !important to flip it back to the theme
+   accent in light / dark themes. Blue theme intentionally keeps each
+   mode's own tint. */
+[data-theme="light"] .hmc-dialog-inner,
+[data-theme="dark"]  .hmc-dialog-inner { --hmc-rgb: var(--t-accent-rgb) !important; }
+
+/* ── Lights individuals popup — hardcoded amber/light-grey overrides ── */
+[data-theme="light"] .area-panel .ch-name,
+[data-theme="dark"]  .area-panel .ch-name { color: var(--text); }
+
+[data-theme="light"] .ch-dim-fill,
+[data-theme="dark"]  .ch-dim-fill {
+  background: linear-gradient(90deg,
+    rgba(var(--t-accent-rgb), 0.55),
+    rgba(var(--t-accent-rgb), 0.95));
+  box-shadow: 0 0 10px rgba(var(--t-accent-rgb), 0.30);
+}
+[data-theme="light"] .ch-dim-slider::-webkit-slider-thumb,
+[data-theme="dark"]  .ch-dim-slider::-webkit-slider-thumb {
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  box-shadow: 0 0 12px rgba(var(--t-accent-rgb), 0.55), 0 2px 6px rgba(0,0,0,0.40);
+}
+[data-theme="light"] .ch-dim-slider::-moz-range-thumb,
+[data-theme="dark"]  .ch-dim-slider::-moz-range-thumb {
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  box-shadow: 0 0 12px rgba(var(--t-accent-rgb), 0.55), 0 2px 6px rgba(0,0,0,0.40);
+}
+[data-theme="light"] .ch-dim-slider:focus-visible::-webkit-slider-thumb,
+[data-theme="dark"]  .ch-dim-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(var(--t-accent-rgb), 0.35), 0 2px 6px rgba(0,0,0,0.40);
+}
+[data-theme="light"] .ch-dim-value,
+[data-theme="dark"]  .ch-dim-value { color: var(--accent); }
+
+/* ── Shutdown-All popup — recolour the red chrome to the theme accent
+       (and fix the hardcoded light-grey "No" button text). The destructive
+       semantics still read clearly because the dialog itself is modal. ── */
+[data-theme="light"] .ash-dialog,
+[data-theme="dark"]  .ash-dialog {
+  border-color: rgba(var(--t-accent-rgb), 0.45);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.55),
+              0 4px 24px rgba(var(--t-accent-rgb), 0.22);
+}
+[data-theme="light"] .ash-icon,
+[data-theme="dark"]  .ash-icon {
+  background: rgba(var(--t-accent-rgb), 0.14);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  color: var(--accent);
+  box-shadow: 0 0 24px rgba(var(--t-accent-rgb), 0.28);
+}
+[data-theme="light"] .ash-btn-no,
+[data-theme="dark"]  .ash-btn-no { color: var(--text); }
+
+[data-theme="light"] .ash-btn-yes,
+[data-theme="dark"]  .ash-btn-yes,
+[data-theme="light"] .ash-btn-yes-shutter,
+[data-theme="dark"]  .ash-btn-yes-shutter {
+  background: rgba(var(--t-accent-rgb), 0.20);
+  border: 1px solid rgba(var(--t-accent-rgb), 0.60);
+  color: var(--text);
+}
+[data-theme="light"] .ash-btn-yes:hover,
+[data-theme="dark"]  .ash-btn-yes:hover,
+[data-theme="light"] .ash-btn-yes-shutter:hover,
+[data-theme="dark"]  .ash-btn-yes-shutter:hover {
+  background: rgba(var(--t-accent-rgb), 0.34);
+  border-color: rgba(var(--t-accent-rgb), 0.90);
+  color: var(--text);
+  box-shadow: 0 4px 18px rgba(var(--t-accent-rgb), 0.34);
+}
+
+/* ── Topbar room-tag + greeting icon — uniform theme-accent tint ───────
+       Override the per-room --room-rgb / --room-rgb-2 values that
+       page<N>-page sets, so the room-tag pill, its house icon, and the
+       greeting "house" badge all carry the theme accent in light/dark.
+       Blue theme keeps the original per-room colours (so the bg-mesh
+       aurora and these chips agree). ── */
+[data-theme="light"] .topbar,
+[data-theme="light"] .greeting--modern,
+[data-theme="dark"]  .topbar,
+[data-theme="dark"]  .greeting--modern {
+  --room-rgb:   var(--t-accent-rgb);
+  --room-rgb-2: var(--t-accent2-rgb);
 }

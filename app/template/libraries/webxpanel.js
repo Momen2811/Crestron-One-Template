@@ -13,11 +13,13 @@ var webXPanelModule = (function () {
   const config = {
     "host": window.location.hostname,
     "port": 49200,
-    "roomId": "",
-    "ipId": "0x03",
+    "roomId": "room-01",
+    "ipId": "0x06",
     "tokenSource": "",
     "tokenUrl": "",
-    "authToken": ""
+    "authToken": "",
+    "username": "",
+    "password": ""
   };
 
   const RENDER_STATUS = {
@@ -219,13 +221,38 @@ var webXPanelModule = (function () {
 
 
   /**
+   * Fetch a bearer token from the CP4 REST API using username/password.
+   * Returns a Promise that resolves to the token string, or null on failure.
+   * Failure is expected (and silent) when the browser blocks cross-origin requests
+   * to a local IP — the normal auth dialog will appear as fallback.
+   */
+  function fetchCrestronToken(host, username, password) {
+    var endpoint = 'https://' + host + '/cws/api/v1/authentication/token';
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        return d.token || d.authToken || d.access_token || null;
+      })
+      .catch(function (err) {
+        console.warn('[WebXPanel] auto-auth skipped (' + err.message + ') — manual login will appear');
+        return null;
+      });
+  }
+
+  /**
    * Connect to the control system through websocket connection.
    * Show the status in the header bar using CSS animation.
    * @param {object} projectConfig
    */
   function connectWebXPanel(projectConfig) {
     connectParams = config;
-    // status = document.querySelector('#webxpanel-tab-content .connection .status');
 
     webXPanelConnectionStatus();
     // Merge the configuration params, params of the URL takes precedence
@@ -235,25 +262,43 @@ var webXPanelModule = (function () {
     // Assign the combined configuration
     connectParams = urlConfig;
 
-    WebXPanel.default.initialize(connectParams);
+    function doInit() {
+      WebXPanel.default.initialize(connectParams);
 
-    updateInfoStatus("app.webxpanel.status.CONNECT_WS");
+      updateInfoStatus("app.webxpanel.status.CONNECT_WS");
 
-    const cs = document.querySelector('#webxpanel-tab-content .connection .cs');
-    const ipId = document.querySelector('#webxpanel-tab-content .connection .ipid');
-    const roomId = document.querySelector('#webxpanel-tab-content .connection .roomid');
-    if (connectParams.host !== "") {
-      cs.textContent = `CS: wss://${connectParams.host}:${connectParams.port}`;
-    }
-    if (connectParams.ipId !== "") {
-      ipId.textContent = `IPID: ${Number(connectParams.ipId).toString(16)}`;
-    }
-    if (connectParams.roomId !== "") {
-      roomId.textContent = `Room Id: ${connectParams.roomId}`;
+      const cs = document.querySelector('#webxpanel-tab-content .connection .cs');
+      const ipId = document.querySelector('#webxpanel-tab-content .connection .ipid');
+      const roomId = document.querySelector('#webxpanel-tab-content .connection .roomid');
+      if (connectParams.host !== "") {
+        cs.textContent = `CS: wss://${connectParams.host}:${connectParams.port}`;
+      }
+      if (connectParams.ipId !== "") {
+        ipId.textContent = `IPID: ${Number(connectParams.ipId).toString(16)}`;
+      }
+      if (connectParams.roomId !== "") {
+        roomId.textContent = `Room Id: ${connectParams.roomId}`;
+      }
+
+      // WebXPanel listeners are called in the below method
+      setWebXPanelListeners();
     }
 
-    // WebXPanel listeners are called in the below method
-    setWebXPanelListeners();
+    // Auto-authenticate: if credentials are configured and no token is already set,
+    // fetch a token from the CP4 REST API before initializing the WebXPanel connection.
+    var u = connectParams.username;
+    var p = connectParams.password;
+    if (u && p && !connectParams.authToken) {
+      fetchCrestronToken(connectParams.host, u, p).then(function (token) {
+        if (token) {
+          connectParams.authToken = token;
+          console.log('[WebXPanel] auto-auth succeeded — connecting with token');
+        }
+        doInit();
+      });
+    } else {
+      doInit();
+    }
   }
 
   /**

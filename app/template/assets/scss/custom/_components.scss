@@ -5,9 +5,9 @@
 // Use of this source code is subject to the terms of the Crestron Software License Agreement
 // under which you licensed this source code.
 
-// custom header
+// custom header — HA glassmorphism: subtle shadow + glass blur
 .navbar-default.navbar {
-  @include box-shadow(0 0 15px rgba(0, 0, 0, 0.85));
+  @include box-shadow(0 8px 32px rgba(10, 14, 26, 0.55), 0 0 0 1px rgba(167, 139, 250, 0.10) inset);
   z-index: $zindex-fixed;
   flex-wrap: nowrap;
   height: $header-height;

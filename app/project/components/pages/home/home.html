@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  home.html  —  Home Hub (landing page)                               │
+  │                                                                      │
+  │  This is the project's $defaultView — the first page users see.      │
+  │  It surfaces three things:                                           │
+  │                                                                      │
+  │    1. Greeting + time + date (time-aware: morning / afternoon / …)   │
+  │    2. House Modes  (6 whole-house scenes — pulses joins via the      │
+  │                     inline-onclick bridge: tap_home('MODE_…'))       │
+  │    3. Room grid   (9 tiles — taps navigate to the room page via      │
+  │                     navigationModule.goToPage('pageN'))              │
+  │                                                                      │
+  │  Joins live in joins-home.js (window.JHOME).                         │
+  │  Logic lives in home.js (homeModule IIFE).                           │
+  │  Styles live in home.scss (CLASSES are unique to this page; the      │
+  │  shared modernization layer in page1.scss provides the global        │
+  │  tokens — .svg-ico, --room-rgb, etc. — automatically because         │
+  │  page1.scss is loaded by every page).                                │
+  └──────────────────────────────────────────────────────────────────────-->
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home Hub</title>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       LIGHT PRESETS CATALOG — defined here AND in page1.html. The hub
+       page preloads at app boot, so this guarantees window.LIGHT_PRESETS
+       is defined before any room page can read it (preventing the bug
+       where opening, say, page3 directly without ever visiting page1
+       would leave the catalog undefined).
+       ════════════════════════════════════════════════════════════════════ -->
+  <script>
+    if (typeof window !== 'undefined' && !window.LIGHT_PRESETS) {
+      window.LIGHT_PRESETS = {
+        on:      { label: 'All On',    icon: '💡', color: 'on'      },
+        off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
+        dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
+        relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
+        tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
+        guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
+        service: { label: 'Service',   icon: '🧹', color: 'service' },
+        p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
+        p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
+        p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
+        p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
+        p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
+        p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
+      };
+    }
+  </script>
+</head>
+<body>
+  <div style="position:relative;min-height:100%;background:var(--bg);z-index:0;">
+    <div class="bg-mesh bg-mesh--room"></div>
+
+    <section id="home-page" class="details-container">
+      <div class="page-wrap">
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             TOPBAR — house brand + live CrComLib connection state
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="topbar">
+          <span class="room-tag hub-tag">
+            <span class="svg-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>
+            </span>
+            <span class="room-tag-name">My Home</span>
+          </span>
+
+          <!-- THEME DROPDOWN — pick the app-wide colour theme.
+               toggleThemeMenu() opens/closes; setTheme() applies + saves. -->
+          <div class="theme-dd" id="themeDD">
+            <button class="theme-dd-trigger" type="button"
+                    aria-haspopup="true" aria-expanded="false"
+                    onclick="toggleThemeMenu()">
+              <span class="theme-dd-sw hub-theme-swatch--blue" id="themeDDSwatch" aria-hidden="true"></span>
+              <span class="theme-dd-label" id="themeDDLabel">Blue</span>
+              <span class="theme-dd-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="theme-dd-menu" id="themeDDMenu" role="menu">
+              <button class="theme-dd-item" role="menuitem" data-theme-opt="blue"
+                      onclick="setTheme('blue')">
+                <span class="theme-dd-sw hub-theme-swatch--blue" aria-hidden="true"></span>
+                <span>Blue</span>
+              </button>
+              <button class="theme-dd-item" role="menuitem" data-theme-opt="dark"
+                      onclick="setTheme('dark')">
+                <span class="theme-dd-sw hub-theme-swatch--dark" aria-hidden="true"></span>
+                <span>Dark</span>
+              </button>
+              <button class="theme-dd-item" role="menuitem" data-theme-opt="light"
+                      onclick="setTheme('light')">
+                <span class="theme-dd-sw hub-theme-swatch--light" aria-hidden="true"></span>
+                <span>Light</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             HERO GREETING — time-aware salutation + live clock
+             home.js updates the salutation, date, and time every minute.
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="hub-hero">
+          <div class="hub-hero-left">
+            <div class="hub-salute" id="hubSalute">Welcome Home</div>
+            <div class="hub-date"   id="hubDate">—</div>
+          </div>
+          <div class="hub-hero-right">
+            <div class="hub-time" id="hubTime">—</div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             HOUSE MODES — 6 whole-house scenes
+             Each pulses one digital join via the inline-onclick bridge.
+             To rename a mode: edit the .hub-mode-lbl text below.
+             To remap a join : edit joins-home.js (HOUSE_MODES.<KEY>).
+             To add  a mode  : add a new <button> + a key in joins-home.js.
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="hub-section">
+          <div class="hub-section-hdr">
+            <span class="hub-section-title">House Modes</span>
+            <span class="hub-section-sub">Whole-home scenes</span>
+          </div>
+          <div class="hub-modes-grid">
+
+            <button class="hub-mode-btn" data-mode="morning"
+                    onclick="hubMode('morning', this)">
+              <span class="hub-mode-ico"><span class="svg-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="4"/><path d="M12 6v2M5 14H3M21 14h-2M6.3 8.3l1.4 1.4M17.7 8.3l-1.4 1.4M3 20h18"/></svg>
+              </span></span>
+              <span class="hub-mode-lbl">Morning</span>
+            </button>
+
+            <button class="hub-mode-btn" data-mode="guest"
+                    onclick="hubMode('guest', this)">
+              <span class="hub-mode-ico"><span class="svg-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 21v-1a6 6 0 0 1 12 0v1"/><circle cx="17" cy="10" r="2.5"/><path d="M14 21v-1a4 4 0 0 1 7 0v1"/></svg>
+              </span></span>
+              <span class="hub-mode-lbl">Guest</span>
+            </button>
+
+            <button class="hub-mode-btn" data-mode="night"
+                    onclick="hubMode('night', this)">
+              <span class="hub-mode-ico"><span class="svg-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M21 13.5A9 9 0 1 1 10.5 3a7 7 0 0 0 10.5 10.5z"/></svg>
+              </span></span>
+              <span class="hub-mode-lbl">Night</span>
+            </button>
+
+            <button class="hub-mode-btn" data-mode="away"
+                    onclick="hubMode('away', this)">
+              <span class="hub-mode-ico"><span class="svg-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 12 12 4l9 8"/><path d="M5 11v9h14v-9"/><path d="M14 20v-6h-4v6"/><path d="M16 4l2 2"/></svg>
+              </span></span>
+              <span class="hub-mode-lbl">Away</span>
+            </button>
+
+            <!-- Sensors card — opens a popup with two action buttons
+                 (Sensors On / Sensors Off). Pulses JHOME.SENSORS.ON / .OFF. -->
+            <button class="hub-mode-btn" data-mode="sensors"
+                    onclick="hubSensors(this)">
+              <span class="hub-mode-ico"><span class="svg-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 4v2M12 18v2M4 12h2M18 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>
+              </span></span>
+              <span class="hub-mode-lbl">Sensors</span>
+            </button>
+
+          </div>
+        </div>
+
+        
+        <!-- ═══════════════════════════════════════════════════════════════
+             SHUTDOWN HOUSE — per-floor + whole-house + master kill
+             4 actions per floor (Lights / AV / Shades / AC), 4 whole-
+             house actions, plus one big master "SHUTDOWN ALL".
+             To remap a join: edit joins-home.js → SHUTDOWN.
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="hub-section">
+          <div class="hub-section-hdr">
+            <span class="hub-section-title">Shutdown House</span>
+            <span class="hub-section-sub">Power off systems</span>
+          </div>
+
+          <div class="hub-shutdown-floor">
+            <div class="hub-shutdown-label">First Floor</div>
+            <div class="hub-shutdown-row">
+              <button class="hub-sd-btn" onclick="hubShutdown('first','all')">All Floor Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('first','lights')">Lights Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('first','av')">A/V Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('first','shades')">Shutters Off</button>
+            </div>
+          </div>
+
+          <div class="hub-shutdown-floor">
+            <div class="hub-shutdown-label">Ground Floor</div>
+            <div class="hub-shutdown-row">
+              <button class="hub-sd-btn" onclick="hubShutdown('ground','all')">All Floor Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('ground','lights')">Lights Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('ground','av')">A/V Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('ground','shades')">Shutters Off</button>
+            </div>
+          </div>
+
+          <div class="hub-shutdown-floor">
+            <div class="hub-shutdown-label">Basement</div>
+            <div class="hub-shutdown-row">
+              <button class="hub-sd-btn" onclick="hubShutdown('basement','all')">All Floor Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('basement','lights')">Lights Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('basement','av')">A/V Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('basement','shades')">Shutters Off</button>
+            </div>
+          </div>
+
+          <div class="hub-shutdown-floor hub-shutdown-allrow">
+            <div class="hub-shutdown-label">Whole House</div>
+            <div class="hub-shutdown-row">
+              <button class="hub-sd-btn" onclick="hubShutdown('all','lights')">All Lights Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('all','av')">All A/V Off</button>
+              <button class="hub-sd-btn" onclick="hubShutdown('all','shades')">All Shutters Off</button>
+            </div>
+          </div>
+
+          <button class="hub-master-btn" onclick="shutdownAll(JHOME.SHUTDOWN.ALL_SYSTEMS)">
+            <span class="svg-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+            </span>
+            <span>Shutdown All Systems</span>
+          </button>
+        </div>
+
+        <!-- Appearance / theme selector moved to the topbar dropdown above. -->
+
+        <!-- Rooms section removed — users navigate to rooms via the
+             footer nav (see project-config.json content.pages[]). -->
+
+      </div><!-- /.page-wrap -->
+    </section><!-- /#home-page -->
+  </div>
+
+  <!-- ▸▸▸ LOAD ORDER (must be in this order):
+       1. joins-home.js  ← sets window.JHOME
+       2. home.js        ← reads window.JHOME, exposes hubMode / hubGoRoom -->
+  <script src="joins-home.js"></script>
+  <script src="home.js"></script>
+</body>
+</html>

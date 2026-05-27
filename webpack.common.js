@@ -35,6 +35,10 @@ function getConfig(envPath) {
     webXPanelContract: {
       to: `${distPath}/config/`,
       from: `./config/*.cse2j`
+    },
+    manifest: {
+      to: `${distPath}`,
+      from: `${srcRoot}/manifest.json`,
     }
   };
 

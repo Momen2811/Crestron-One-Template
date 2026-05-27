@@ -161,3 +161,79 @@
        url('#{$font-path}roboto-v27-latin-900italic.ttf') format('truetype'), /* Safari, Android, iOS */
        url('#{$font-path}roboto-v27-latin-900italic.svg#Roboto') format('svg'); /* Legacy iOS */
 }
+
+/* ============================================================================
+ * Sora + JetBrains Mono — bundled locally so the panel does not depend on
+ * fonts.googleapis.com at runtime. Files copied from @fontsource/sora and
+ * @fontsource/jetbrains-mono by scripts/copy-fonts.js into the same
+ * app/template/assets/fonts/ directory as the Roboto WOFF/WOFF2 files above.
+ *
+ * $font-path = "./../fonts/" (declared in _variables-custom.scss line 39).
+ * font-display: swap → system font shows during the brief WOFF2 decode
+ * (~10-50 ms) so users never see a flash of invisible text.
+ * ========================================================================= */
+
+/* sora-300 */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('#{$font-path}sora-300.woff2') format('woff2');
+}
+/* sora-400 */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('#{$font-path}sora-400.woff2') format('woff2');
+}
+/* sora-500 */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('#{$font-path}sora-500.woff2') format('woff2');
+}
+/* sora-600 */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('#{$font-path}sora-600.woff2') format('woff2');
+}
+/* sora-700 */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('#{$font-path}sora-700.woff2') format('woff2');
+}
+/* jetbrains-mono-400 */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('#{$font-path}jetbrainsmono-400.woff2') format('woff2');
+}
+/* jetbrains-mono-500 */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('#{$font-path}jetbrainsmono-500.woff2') format('woff2');
+}
+/* jetbrains-mono-600 */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('#{$font-path}jetbrainsmono-600.woff2') format('woff2');
+}

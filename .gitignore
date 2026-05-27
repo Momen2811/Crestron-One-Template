@@ -4,6 +4,7 @@ build/
 *.log
 .DS_Store
 .env.local
+.claude/
 
 
 

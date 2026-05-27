@@ -460,13 +460,22 @@ div#pageStatusIdentifier {
 // ============================================================
 
 // ── Design tokens ─────────────────────────────────────────
-$footer-bg: #0d1117;
-$footer-border-top: rgba(255, 255, 255, 0.07);
-$footer-active-from: #4f8ef7;
-$footer-active-to: #6c63ff;
-$footer-active-glow: rgba(79, 142, 247, 0.30);
-$footer-text-muted: rgba(255, 255, 255, 0.38);
-$footer-text-active: #ffffff;
+// These resolve to CSS custom properties (defined in
+// _theme-additions.scss :root / [data-theme="…"]) so the footer
+// re-colours with the active theme — blue / dark / light.
+$footer-bg: var(--bg);
+$footer-border-top: rgba(var(--t-overlay-rgb), 0.07);
+$footer-active-from: var(--accent2);
+$footer-active-to:   var(--accent);
+$footer-active-glow: rgba(var(--t-accent-rgb), 0.32);
+// Resting / hover labels use the themed text colour — black in the light
+// theme, light in the dark/blue themes — so every label stays readable.
+$footer-text-muted:  var(--text);
+$footer-text-hover:  var(--text);
+$footer-text-active: var(--on-accent);
+// Active pill — SOLID accent gradient, identical to a pressed widget tab.
+$footer-pill-bg: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+$footer-pill-border: transparent;
 
 // ── Height per breakpoint ─────────────────────────────────
 $footer-height-xs: 44px;
@@ -513,8 +522,8 @@ $bar-8k: 5px;
     background: linear-gradient(
       90deg,
       transparent,
-      rgba(79, 142, 247, 0.45) 40%,
-      rgba(108, 99, 255, 0.45) 60%,
+      rgba(var(--t-accent2-rgb), 0.45) 40%,
+      rgba(var(--t-accent-rgb), 0.45) 60%,
       transparent
     );
     pointer-events: none;
@@ -551,7 +560,7 @@ $bar-8k: 5px;
     scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;      // Smooth momentum on iOS
     scrollbar-width: thin;
-    scrollbar-color: rgba(79, 142, 247, 0.3) transparent;
+    scrollbar-color: rgba(var(--t-accent2-rgb), 0.3) transparent;
     
     
 
@@ -560,7 +569,7 @@ $bar-8k: 5px;
       height: 4px;
     }
     &::-webkit-scrollbar-thumb {
-      background: rgba(79, 142, 247, 0.4);
+      background: rgba(var(--t-accent2-rgb), 0.4);
       border-radius: 4px;
     }
   }
@@ -587,73 +596,77 @@ $bar-8k: 5px;
       .ch5-button {
         opacity: 1 !important;
         border: 0;
-        border-radius: 0;
+        border-radius: 999px;            // full pill rounding on hover-bg
         background: transparent !important;
-        width: 150px;
-        height: $footer-height-sm;
+        width: 130px;
+        height: calc(#{$footer-height-sm} - 12px);
+        margin: 6px 4px;                 // breathing room so the pill doesn't touch edges
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        padding: 0 6px;
-        transition: transform 0.18s ease;
+        padding: 0 14px;
+        transition: transform 0.18s ease, background-color 0.22s ease;
         position: relative;
-        overflow: hidden;
-        font-size: large;
+        overflow: visible;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
 
-        // Active indicator bar
-        &::after {
+        // ── PILL BACKGROUND (active state) ────────────────────
+        // ::before renders the glass pill behind the label.
+        &::before {
           content: '';
           position: absolute;
-          bottom: 0;
-          left: 12%;
-          right: 12%;
-          height: $bar-sm;
-          border-radius: 2px 2px 0 0;
-          background: linear-gradient(90deg, $footer-active-from, $footer-active-to);
+          inset: 0;
+          border-radius: inherit;
+          background: $footer-pill-bg;
+          border: 1px solid $footer-pill-border;
+          box-shadow:
+            0 4px 18px $footer-active-glow,
+            inset 0 1px 0 rgba(var(--t-overlay-rgb), 0.08);
           opacity: 0;
-          transform: scaleX(0);
-          transition: all 0.22s ease;
+          transform: scale(0.92);
+          transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0.0, 0.2, 1);
+          pointer-events: none;
         }
 
-        &:hover .ch5-button--label { 
-          color: #e4e9f7; 
+        // ── HOVER (idle items) — soft white ghost pill ────────
+        &:hover {
+          background: rgba(var(--t-overlay-rgb), 0.05) !important;
+          .ch5-button--label { color: $footer-text-hover; }
         }
-        &:active { 
-          transform: scale(0.94); 
+        &:active {
+          transform: scale(0.96);
         }
 
+        // ── ACTIVE / SELECTED ────────────────────────────────
         &.ch5-button--selected {
-          &::after {
-            opacity: 1;
-            transform: scaleX(1);
-          }
+          background: transparent !important;   // pill comes from ::before
+
           &::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: radial-gradient(
-              ellipse 90% 90% at 50% 100%,
-              #4f8ef7 0%,
-              transparent 90%
-            );
+            opacity: 1;
+            transform: scale(1);
           }
+
           .ch5-button--label {
             color: $footer-text-active;
-            font-weight: 600;
+            font-weight: 700;
+            text-shadow: 0 0 12px rgba(var(--t-accent-rgb), 0.45);
           }
         }
       }
 
       .ch5-button--label {
-        font-size: $label-xl  !important;
+        position: relative;       // sit above ::before pill
+        z-index: 1;
+        font-size: $label-xl !important;
         font-weight: 500;
         text-transform: capitalize;
-        letter-spacing: 0.7px;
+        letter-spacing: 0.6px;
         color: $footer-text-muted;
         margin: 0;
         padding: 0;
-        transition: color 0.22s ease;
+        transition: color 0.22s ease, font-weight 0.22s ease, text-shadow 0.22s ease;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -672,24 +685,79 @@ $bar-8k: 5px;
   }
 
   // ===========================================================
-  // 4. RESPONSIVE BREAKPOINTS (same as before + better mobile)
+  // 4. RESPONSIVE BREAKPOINTS — adapt pill size per device
   // ===========================================================
-  @media (max-width: 374px) {
-    .list-item { min-width: 58px; }
-    .ch5-button--label { font-size: $label-xs; }
+
+  // ── Tiny phones (< 360 px) ──
+  @media (max-width: 359px) {
+    .list-item { min-width: 70px; }
+    .ch5-button {
+      width: 84px;
+      height: calc(#{$footer-height-xs} - 10px);
+      padding: 0 8px;
+      margin: 5px 2px;
+    }
+    .ch5-button--label { font-size: $label-xs !important; letter-spacing: 0.3px; }
   }
 
-  @media (min-width: 576px) {
+  // ── Phones (360-575) ──
+  @media (min-width: 360px) and (max-width: 575px) {
+    .list-item { min-width: 80px; }
+    .ch5-button {
+      width: 100px;
+      height: calc(#{$footer-height-sm} - 12px);
+      padding: 0 10px;
+      margin: 6px 3px;
+    }
+    .ch5-button--label { font-size: $label-sm !important; }
+  }
+
+  // ── Tablets / iPad portrait (576-991) ──
+  @media (min-width: 576px) and (max-width: 991px) {
     .list-item .horizontal-list-item { min-height: $footer-height-md; }
-    .ch5-button { height: $footer-height-md; }
-    .ch5-button--label { font-size: $label-md; }
-    .list-item {min-width: 10px; }
-
+    .ch5-button {
+      width: 120px;
+      height: calc(#{$footer-height-md} - 12px);
+      margin: 6px 4px;
+    }
+    .ch5-button--label { font-size: $label-md !important; }
   }
 
-  // ... (you can keep the rest of your breakpoints as they were)
+  // ── iPad landscape / TSW-770 / desktops (992-1279) ──
+  @media (min-width: 992px) and (max-width: 1279px) {
+    .ch5-button {
+      width: 140px;
+      height: calc(#{$footer-height-lg} - 14px);
+      margin: 7px 4px;
+    }
+    .ch5-button--label { font-size: $label-lg !important; }
+  }
 
-  @include media-breakpoint-down(sm) {
-    .ch5-button--label { font-size: $label-xs; }
+  // ── TSW-1060 / large desktops (1280-1599) ──
+  @media (min-width: 1280px) and (max-width: 1599px) {
+    .ch5-button {
+      width: 150px;
+      height: calc(#{$footer-height-lg} - 14px);
+      margin: 7px 5px;
+    }
+    .ch5-button--label { font-size: $label-xl !important; }
+  }
+
+  // ── TSW-1070 / wall panels / 4K (≥ 1600) ──
+  @media (min-width: 1600px) {
+    .ch5-button {
+      width: 170px;
+      height: calc(#{$footer-height-xl} - 16px);
+      margin: 8px 6px;
+      padding: 0 18px;
+    }
+    .ch5-button--label { font-size: $label-4k !important; letter-spacing: 0.8px; }
+  }
+
+  // ── Touch devices: kill sticky :hover background ──
+  @media (hover: none) and (pointer: coarse) {
+    .ch5-button:hover { background: transparent !important; }
+    .ch5-button:hover .ch5-button--label { color: $footer-text-muted; }
+    .ch5-button.ch5-button--selected:hover .ch5-button--label { color: $footer-text-active; }
   }
 }

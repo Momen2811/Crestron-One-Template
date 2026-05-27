@@ -5,39 +5,173 @@
 // Use of this source code is subject to the terms of the Crestron Software License Agreement
 // under which you licensed this source code.
 
+// ════════════════════════════════════════════════════════════════════
+// THEME SYSTEM — three selectable colour modes
+// Switched at runtime by the  data-theme  attribute on <html>
+// (set by the theme buttons on the home page; persisted in localStorage).
+//   blue  — original purple/teal glassmorphism   (default)
+//   dark  — deep-teal palette
+//   light — bright neutral palette
+//
+// Raw palette tokens are --t-* . The semantic tokens further down
+// (--bg, --card, --accent, --text, --ha-* …) reference them, so every
+// rule in page1.scss / home.scss that already uses var(--bg) etc.
+// re-themes automatically.  Add new colours as --t-* + a semantic alias.
+// ════════════════════════════════════════════════════════════════════
+:root,
+[data-theme="blue"] {
+  --t-bg:          #0a0e1a;
+  --t-bg2:         #131829;
+  --t-surface:     #0f1422;
+  --t-card-rgb:    26, 31, 58;
+  --t-card2-rgb:   37, 42, 69;
+  --t-card-solid:  #1a1f3a;
+  --t-card-solid2: #252a45;
+  --t-text:        #e4e9f7;
+  --t-text2:       #8fa3c8;
+  --t-accent:      #2dd4bf;
+  --t-accent-rgb:  45, 212, 191;
+  --t-accent2:     #a78bfa;
+  --t-accent2-rgb: 167, 139, 250;
+  --t-overlay-rgb: 255, 255, 255;
+  --t-on-accent:   #ffffff;
+}
+[data-theme="dark"] {
+  // Near-black surfaces + the SAME calm-blue accent the light theme uses.
+  // Backgrounds stay deep black-grey; the accent switched from warm amber
+  // to blue so the dark theme reads as a "blue accent on black" palette
+  // (matches the light theme's accent, not its surfaces).
+  --t-bg:          #0a0c10;          /* near-black base */
+  --t-bg2:         #10141c;
+  --t-surface:     #10141c;
+  --t-card-rgb:    22, 26, 34;        /* neutral cool-dark card surface */
+  --t-card2-rgb:   32, 38, 50;
+  --t-card-solid:  #161a22;
+  --t-card-solid2: #202632;
+  --t-text:        #ebeef5;           /* cool near-white text */
+  --t-text2:       #9aa2b3;           /* cool mid-grey secondary text */
+  --t-accent:      #2563eb;           /* calm blue accent (same as light) */
+  --t-accent-rgb:  37, 99, 235;
+  --t-accent2:     #3b82f6;           /* lighter blue — gradient stays all-blue */
+  --t-accent2-rgb: 59, 130, 246;
+  --t-overlay-rgb: 255, 255, 255;
+  --t-on-accent:   #ffffff;           /* white text on the blue accent fill */
+}
+[data-theme="light"] {
+  // Clean white surfaces + a single calm-blue accent (no colour mixing).
+  --t-bg:          #f4f6f9;           /* soft-white page background */
+  --t-bg2:         #eceff4;
+  --t-surface:     #eef1f6;
+  --t-card-rgb:    255, 255, 255;     /* pure-white cards */
+  --t-card2-rgb:   248, 250, 252;
+  --t-card-solid:  #ffffff;
+  --t-card-solid2: #f1f4f8;
+  --t-text:        #18181b;           /* near-black primary text */
+  --t-text2:       #5b6170;           /* slate-grey secondary text */
+  --t-accent:      #2563eb;           /* calm blue accent */
+  --t-accent-rgb:  37, 99, 235;
+  --t-accent2:     #3b82f6;           /* lighter blue — gradient stays all-blue */
+  --t-accent2-rgb: 59, 130, 246;
+  --t-overlay-rgb: 17, 24, 39;
+  --t-on-accent:   #ffffff;
+}
+
+// Semantic tokens — what page1.scss / home.scss actually consume.
+:root {
+  --bg:          var(--t-bg);
+  --bg2:         var(--t-bg2);
+  --surface:     var(--t-surface);
+  --card:        rgba(var(--t-card-rgb), 0.55);
+  --card2:       rgba(var(--t-card2-rgb), 0.62);
+  --card-solid:  var(--t-card-solid);
+  --card-solid2: var(--t-card-solid2);
+  --glass-bg:    rgba(var(--t-accent2-rgb), 0.06);
+  --border:      rgba(var(--t-accent2-rgb), 0.14);
+  --border-hi:   rgba(var(--t-accent-rgb), 0.32);
+  --accent:      var(--t-accent);
+  --accent2:     var(--t-accent2);
+  --on-accent:   var(--t-on-accent);   /* readable text on an accent fill */
+  --accent-grad: linear-gradient(135deg, var(--t-accent2) 0%, var(--t-accent) 100%);
+  --accent-glow: rgba(var(--t-accent-rgb), 0.32);
+  --accent-glow2:rgba(var(--t-accent2-rgb), 0.32);
+  --text:        var(--t-text);
+  --text2:       var(--t-text2);
+  --muted:       rgba(var(--t-overlay-rgb), 0.38);
+  // Semantic status colours — intentionally constant across all themes.
+  --yellow:      #fbbf24;
+  --yellow-glow: rgba(251, 191, 36, 0.28);
+  --green:       #34d399;
+  --red:         #f87171;
+
+  // Shell-chrome tokens (header / footer / nav) now follow the theme too.
+  --ha-bg:        var(--t-bg);
+  --ha-bg2:       var(--t-bg2);
+  --ha-purple:    var(--t-accent2);
+  --ha-teal:      var(--t-accent);
+  --ha-text:      var(--t-text);
+  --ha-text2:     var(--t-text2);
+  --ha-border:    rgba(var(--t-accent2-rgb), 0.18);
+  --ha-border-hi: rgba(var(--t-accent-rgb), 0.42);
+  --ha-glass:     rgba(var(--t-card-rgb), 0.55);
+  --ha-glass2:    rgba(var(--t-card2-rgb), 0.62);
+  --ha-glow-p:    rgba(var(--t-accent2-rgb), 0.32);
+  --ha-glow-t:    rgba(var(--t-accent-rgb), 0.32);
+}
+// ─────────────────────────── THEME SYSTEM END ───────────────────────────
+
+// Force dark body background everywhere the shell touches
+html, body, #cr-com-lib-host {
+  background-color: var(--ha-bg) !important;
+}
+
 .list-item {
   ch5-button {
-    --ch5-button--text-background-color: var(--theme-shell--navigation-button-list-background-color);
-    --ch5-button--text-pressed-background-color: var(--theme-shell--navigation-button-list-background-color);
-    --ch5-button--text-selected-background-color: var(--theme-shell--navigation-button-list-background-color);
+    --ch5-button--text-background-color: transparent;
+    --ch5-button--text-pressed-background-color: var(--ha-glass);
+    --ch5-button--text-selected-background-color: var(--ha-glass);
+    --ch5-button--text-label-font-color: var(--ha-text);
+    --ch5-button--text-pressed-label-font-color: #ffffff;
+    --ch5-button--text-selected-label-font-color: #ffffff;
   }
 }
 
 .footer-page {
-  background-color: var(--theme-colors--theme-background-color);
-  color: var(--theme-colors--theme-body-font-color);
+  background: var(--ha-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-top: 1px solid var(--ha-border);
+  color: var(--ha-text);
 }
 
-// navbars
+// navbars — glass header with purple/teal accent
 .navbar-dark {
   &.navbar-default {
     &,
     .navbar-nav {
-      background-color: var(--theme-shell--header-background-color);
+      background: var(--ha-glass) !important;
+      backdrop-filter: blur(20px) saturate(150%);
+      -webkit-backdrop-filter: blur(20px) saturate(150%);
+      border-bottom: 1px solid var(--ha-border);
     }
 
     .btn-link {
-      color: var(--theme-colors--theme-body-font-color);
+      color: var(--ha-text);
+      transition: color 0.22s, opacity 0.22s;
+
+      &:hover {
+        color: var(--ha-teal);
+        opacity: 1;
+      }
     }
 
     // VERTICAL MENU START
     .toggler {
       .toggle-icon {
-        border-color: var(--theme-colors--theme-body-font-color);
+        border-color: var(--ha-text);
 
         &::before,
         &::after {
-          background-color: var(--theme-colors--theme-body-font-color);
+          background-color: var(--ha-text);
         }
       }
     }
@@ -45,14 +179,17 @@
     // VERTICAL MENU END
     .active,
     .navbar-nav .active a {
-      color: var(--theme-shell--navigation-button-list-collapsible-icon);
+      color: var(--ha-teal);
     }
   }
 }
 
-// bottom navigation
+// bottom navigation — glass strip with HA accent
 .swiper-thumb {
-  background-color: var(--theme-shell--navigation-button-background-color);
+  background: var(--ha-glass2);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-top: 1px solid var(--ha-border);
 
   .list-item {
     ch5-button {
@@ -64,7 +201,12 @@
 }
 
 .thumb-action svg {
-  fill: var(--theme-shell--navigation-button-list-collapsible-icon);
+  fill: var(--ha-purple);
+  transition: fill 0.2s;
+
+  &:hover {
+    fill: var(--ha-teal);
+  }
 }
 
 .horizontal-menu,
@@ -72,12 +214,17 @@
   .swiper-thumb {
     .list-item {
       ch5-button {
-        --ch5-button--text-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-pressed-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-selected-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-icon-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-pressed-icon-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-selected-icon-color: var(--theme-colors--theme-body-font-color);
+        --ch5-button--text-label-font-color: var(--ha-text2);
+        --ch5-button--text-pressed-label-font-color: #ffffff;
+        --ch5-button--text-selected-label-font-color: #ffffff;
+        --ch5-button--text-icon-color: var(--ha-text2);
+        --ch5-button--text-pressed-icon-color: var(--ha-teal);
+        --ch5-button--text-selected-icon-color: var(--ha-teal);
+        --ch5-button--text-background-color: transparent;
+        --ch5-button--text-selected-background-color:
+          linear-gradient(135deg, rgba(var(--t-accent2-rgb),0.22), rgba(var(--t-accent-rgb),0.18));
+        --ch5-button--text-pressed-background-color:
+          linear-gradient(135deg, rgba(var(--t-accent2-rgb),0.30), rgba(var(--t-accent-rgb),0.24));
         --ch5-button--text-border-width: 0;
         --ch5-button--text-selected-border-width: 0;
         --ch5-button--text-pressed-border-width: 0;
@@ -90,16 +237,89 @@
   .swiper-thumb {
     .list-item {
       ch5-button {
-        --ch5-button--text-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-pressed-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-selected-label-font-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-icon-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-pressed-icon-color: var(--theme-colors--theme-body-font-color);
-        --ch5-button--text-selected-icon-color: var(--theme-colors--theme-body-font-color);
+        --ch5-button--text-label-font-color: var(--ha-text2);
+        --ch5-button--text-pressed-label-font-color: #ffffff;
+        --ch5-button--text-selected-label-font-color: #ffffff;
+        --ch5-button--text-icon-color: var(--ha-text2);
+        --ch5-button--text-pressed-icon-color: var(--ha-teal);
+        --ch5-button--text-selected-icon-color: var(--ha-teal);
+        --ch5-button--text-background-color: transparent;
+        --ch5-button--text-selected-background-color:
+          linear-gradient(135deg, rgba(var(--t-accent2-rgb),0.22), rgba(var(--t-accent-rgb),0.18));
+        --ch5-button--text-pressed-background-color:
+          linear-gradient(135deg, rgba(var(--t-accent2-rgb),0.30), rgba(var(--t-accent-rgb),0.24));
         --ch5-button--text-border-width: 0;
         --ch5-button--text-selected-border-width: 0;
         --ch5-button--text-pressed-border-width: 0;
       }
     }
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Round circle buttons in the header (logs / theme / info)
+// ════════════════════════════════════════════════════════════════════
+.navbar-action-right {
+  ch5-button {
+    --ch5-button--circle-background-color: var(--ha-glass);
+    --ch5-button--circle-pressed-background-color:
+      linear-gradient(135deg, var(--ha-purple), var(--ha-teal));
+    --ch5-button--circle-icon-color: var(--ha-text);
+    --ch5-button--circle-pressed-icon-color: #ffffff;
+    --ch5-button--circle-border-color: var(--ha-border);
+    --ch5-button--circle-border-width: 1px;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Generic content background — keep it transparent so the page-wrap's
+// purple/teal aurora bg-mesh shows through every screen
+// ════════════════════════════════════════════════════════════════════
+#content-index-page,
+#content-index-body,
+ch5-background {
+  background: transparent !important;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Touch panel: prevent :hover from sticking after tap
+// On Crestron TSW panels (touch-only Chromium) tapping a button applies
+// :hover which persists until the next tap.  The @media (hover: none)
+// block resets every visual property that the :hover rules change, so
+// buttons snap back to their resting look immediately after release.
+// Desktop browser preview keeps full hover effects (hover: hover).
+// ════════════════════════════════════════════════════════════════════
+@media (hover: none) {
+  // Media row buttons (Vol / Mute / CH / Source / Power in TV widget)
+  .media-btn:hover,
+  [id^="tvVolUpBtn"]:hover, [id^="tvVolDownBtn"]:hover,
+  [id^="tvMuteBtn"]:hover,
+  [id^="tvChUpBtn"]:hover,  [id^="tvChDownBtn"]:hover,
+  [id^="appVolUpBtn"]:hover,[id^="appVolDownBtn"]:hover,
+  [id^="appMuteBtn"]:hover,
+  [id^="appChUpBtn"]:hover, [id^="appChDownBtn"]:hover {
+    transform:    none;
+    background:   rgba(var(--t-card-rgb), 0.55);
+    border-color: rgba(var(--t-accent2-rgb), 0.16);
+    box-shadow:   0 4px 16px rgba(0, 0, 0, 0.28);
+    color:        var(--text);
+  }
+  // D-pad directional buttons
+  .dpad-btn:hover {
+    transform:    none;
+    background:   rgba(var(--t-card-rgb), 0.62);
+    border-color: rgba(var(--t-accent2-rgb), 0.18);
+    box-shadow:   0 6px 18px rgba(0, 0, 0, 0.40), 0 0 0 1px rgba(var(--t-overlay-rgb),0.04) inset;
+    color:        var(--text);
+  }
+  // D-pad OK/center (gradient orb — keep its glow, just no scale)
+  .dpad-center:hover { transform: none; }
+  // Numeric / function keypad keys
+  .keypad-btn:hover {
+    transform:    none;
+    background:   rgba(var(--t-card-rgb), 0.55);
+    border-color: rgba(var(--t-accent2-rgb), 0.14);
+    box-shadow:   0 4px 12px rgba(0, 0, 0, 0.25);
+    color:        var(--text);
   }
 }

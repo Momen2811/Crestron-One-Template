@@ -1,0 +1,649 @@
+/* ============================================================================
+ * home.scss  —  Home Hub (landing page)
+ * ============================================================================
+ *
+ * Only contains rules that are NEW to the hub. All shared tokens
+ * (--room-rgb, .topbar, .room-tag, .conn, .svg-ico, .bg-mesh--room)
+ * come from the modernization layer at the bottom of page1.scss, which
+ * is loaded by every page in the project.
+ *
+ * The hub also overrides #home-page's --room-rgb to a brand purple/teal
+ * pair (different from any individual room) so the aurora reads as
+ * "house overview", not as any one room.
+ * ============================================================================ */
+
+#home-page {
+  --room-rgb:    var(--t-accent2-rgb);       /* brand purple */
+  --room-rgb-2:   var(--t-accent-rgb);       /* brand teal */
+}
+
+/* The hub topbar tag uses the page's gradient swatch instead of a flat tint. */
+.hub-tag {
+  background: linear-gradient(135deg,
+              rgba(var(--room-rgb),    0.18) 0%,
+              rgba(var(--room-rgb-2),  0.18) 100%) !important;
+  border-color: rgba(var(--room-rgb), 0.42) !important;
+}
+.hub-tag .svg-ico { color: rgb(var(--room-rgb)); }
+
+/* ── HERO greeting + clock ───────────────────────────────────────────────── */
+.hub-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 0 22px;
+  border-bottom: 1px solid rgba(var(--t-overlay-rgb),0.06);
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+.hub-hero-left { min-width: 0; flex: 1 1 auto; }
+.hub-salute {
+  font-size: clamp(22px, 4.4vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  background: linear-gradient(135deg, rgb(var(--room-rgb)) 0%, rgb(var(--room-rgb-2)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  line-height: 1.1;
+}
+.hub-date {
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: 4px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+.hub-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(28px, 6vw, 42px);
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -1px;
+  line-height: 1;
+}
+
+/* ── Section blocks (House Modes, Rooms) ─────────────────────────────────── */
+.hub-section { margin-bottom: 24px; }
+.hub-section-hdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.hub-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.hub-section-sub {
+  font-size: 11px;
+  color: var(--text2);
+  font-weight: 500;
+}
+
+/* ── House Modes grid ─────────────────────────────────────────────────────── */
+.hub-modes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+.hub-mode-btn {
+  --hm-rgb: var(--t-accent2-rgb);            /* default; per-mode rules override */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 10px;
+  min-height: 92px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--hm-rgb), 0.28);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hm-rgb), 0.18), transparent 70%),
+    linear-gradient(135deg, var(--card-solid) 0%, var(--card-solid) 100%);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(.4,0,.2,1), border-color .2s, box-shadow .22s;
+  touch-action: manipulation;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+}
+.hub-mode-btn[data-mode="morning"] { --hm-rgb: 251, 191,  36; }
+.hub-mode-btn[data-mode="guest"]   { --hm-rgb:  var(--t-accent-rgb); }
+.hub-mode-btn[data-mode="night"]   { --hm-rgb:  79, 142, 247; }
+.hub-mode-btn[data-mode="away"]    { --hm-rgb: 249, 107, 107; }
+.hub-mode-btn[data-mode="sensors"] { --hm-rgb: 167, 139, 250; }
+.hub-mode-btn[data-mode="party"]   { --hm-rgb: var(--t-accent2-rgb); }
+.hub-mode-btn[data-mode="relax"]   { --hm-rgb: 251, 146,  60; }
+.hub-mode-btn:hover {
+  transform: translateY(-3px);
+  border-color: rgba(var(--hm-rgb), 0.65);
+  box-shadow: 0 8px 24px rgba(var(--hm-rgb), 0.30);
+}
+.hub-mode-btn:active { transform: scale(0.96); transition: transform 0.08s; }
+.hub-mode-btn .hub-mode-ico {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: rgba(var(--hm-rgb), 0.16);
+  border: 1px solid rgba(var(--hm-rgb), 0.32);
+  font-size: 22px;
+  color: rgb(var(--hm-rgb));
+  transition: transform .2s, background .2s, border-color .2s;
+}
+.hub-mode-btn:hover .hub-mode-ico {
+  transform: scale(1.08);
+  background: rgba(var(--hm-rgb), 0.26);
+  border-color: rgba(var(--hm-rgb), 0.62);
+}
+.hub-mode-lbl {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: rgba(var(--t-overlay-rgb),0.92);
+}
+
+/* Persistent "currently active" mode state — set by SIMPL feedback */
+.hub-mode-btn.hub-mode-active {
+  border-color: rgba(var(--hm-rgb), 0.90);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(var(--hm-rgb), 0.32), transparent 70%),
+    linear-gradient(135deg, var(--card-solid) 0%, var(--card-solid) 100%);
+  box-shadow:
+    0 0 0 1px rgba(var(--hm-rgb), 0.55),
+    0 8px 24px rgba(var(--hm-rgb), 0.38);
+}
+.hub-mode-btn.hub-mode-active .hub-mode-ico {
+  background: rgba(var(--hm-rgb), 0.30);
+  border-color: rgba(var(--hm-rgb), 0.72);
+}
+
+/* "Just-pulsed" feedback flash */
+.hub-mode-btn.hub-mode-pulsed { animation: hubModePulse 0.55s ease-out; }
+@keyframes hubModePulse {
+  0%   { box-shadow: 0 8px 24px rgba(var(--hm-rgb), 0.30); }
+  40%  { box-shadow: 0 0 0 8px rgba(var(--hm-rgb), 0.30), 0 8px 24px rgba(var(--hm-rgb), 0.30); }
+  100% { box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+}
+
+/* ── Rooms grid ──────────────────────────────────────────────────────────── */
+.hub-rooms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+.hub-room-card {
+  /* fallback room accent; per-card #hub-room-pageN rules below override */
+  --rc-rgb: 143, 163, 200;
+  --rc-rgb-2: var(--t-accent2-rgb);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 14px;
+  min-height: 110px;
+  border-radius: 18px;
+  border: 1px solid rgba(var(--rc-rgb), 0.30);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(var(--rc-rgb-2), 0.18), transparent 60%),
+    linear-gradient(135deg, var(--card-solid) 0%, var(--bg2) 100%);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .2s cubic-bezier(.4,0,.2,1), border-color .2s, box-shadow .22s;
+  touch-action: manipulation;
+  overflow: hidden;
+}
+.hub-room-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg,
+              rgba(var(--rc-rgb), 0.08) 0%,
+              rgba(var(--rc-rgb-2), 0.04) 50%,
+              transparent 100%);
+  pointer-events: none;
+  opacity: 0.6;
+  transition: opacity 0.22s;
+}
+.hub-room-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(var(--rc-rgb), 0.62);
+  box-shadow:
+    0 10px 28px rgba(var(--rc-rgb), 0.28),
+    0 0 0 1px rgba(var(--rc-rgb), 0.18) inset;
+}
+.hub-room-card:hover::before { opacity: 1; }
+.hub-room-card:active { transform: scale(0.97); transition: transform 0.08s; }
+.hub-room-card:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(var(--rc-rgb), 0.42),
+    0 4px 18px rgba(0,0,0,0.4);
+}
+
+.hub-room-ico {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  background: rgba(var(--rc-rgb), 0.16);
+  border: 1px solid rgba(var(--rc-rgb), 0.32);
+  font-size: 20px;
+  color: rgb(var(--rc-rgb));
+  position: relative; z-index: 1;
+  transition: transform .2s;
+}
+.hub-room-card:hover .hub-room-ico { transform: scale(1.06) rotate(-2deg); }
+.hub-room-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.25;
+  position: relative; z-index: 1;
+  letter-spacing: -0.1px;
+}
+
+/* Per-room card colours mirror the per-room aurora tints in page1.scss
+   so each tile previews the room you're about to enter. */
+#hub-room-page1 { --rc-rgb: var(--t-accent2-rgb); --rc-rgb-2:  var(--t-accent-rgb); }  /* Master Bedroom */
+#hub-room-page2 { --rc-rgb: 251, 146,  60; --rc-rgb-2: 251, 191,  36; }  /* Living Room */
+#hub-room-page3 { --rc-rgb:  79, 142, 247; --rc-rgb-2: var(--t-accent2-rgb); }  /* Reception */
+#hub-room-page4 { --rc-rgb: 251, 191,  36; --rc-rgb-2: 249, 107, 107; }  /* Kitchen */
+#hub-room-page5 { --rc-rgb: 244, 114, 182; --rc-rgb-2: var(--t-accent2-rgb); }  /* Dining */
+#hub-room-page6 { --rc-rgb:  var(--t-accent-rgb); --rc-rgb-2:  79, 142, 247; }  /* Office */
+#hub-room-page7 { --rc-rgb: 134, 239, 172; --rc-rgb-2:  var(--t-accent-rgb); }  /* Guest */
+#hub-room-page8 { --rc-rgb:  56, 189, 248; --rc-rgb-2: var(--t-accent2-rgb); }  /* Bathroom */
+#hub-room-page9 { --rc-rgb:  34, 197,  94; --rc-rgb-2: 134, 239, 172; }  /* Garden */
+
+/* ── House Functions  (per-floor on/off chips) ───────────────────────────── */
+.hub-floor-block {
+  margin-bottom: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(var(--t-overlay-rgb),0.025);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.06);
+}
+.hub-floor-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(var(--t-overlay-rgb),0.78);
+}
+.hub-floor-label .svg-ico {
+  font-size: 14px;
+  color: rgb(var(--room-rgb));
+}
+/* HORIZONTAL LIST ROWS per floor — one row per system, stacked vertically.
+   Each row is: [icon] [system name] [────────────────] [ON] [OFF]
+   Scannable, list-like, fits more on screen than the previous grid. */
+.hub-sys-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hub-sys-chip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(var(--t-overlay-rgb),0.04);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.08);
+  min-height: 48px;
+  transition: background .18s, border-color .18s;
+}
+.hub-sys-chip:hover {
+  background: rgba(var(--t-overlay-rgb),0.06);
+  border-color: rgba(var(--t-overlay-rgb),0.12);
+}
+/* Per-system tinted icon — colour scoped per chip type. */
+.hub-sys-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  font-size: 16px;
+  background: rgba(var(--sys-rgb, var(--t-accent2-rgb)), 0.14);
+  border: 1px solid rgba(var(--sys-rgb, var(--t-accent2-rgb)), 0.26);
+  color: rgb(var(--sys-rgb, var(--t-accent2-rgb)));
+}
+.hub-sys-chip[data-sys="lights"] { --sys-rgb: 251, 191,  36; }   /* amber  */
+.hub-sys-chip[data-sys="ac"]     { --sys-rgb:  79, 142, 247; }   /* blue   */
+.hub-sys-chip[data-sys="shades"] { --sys-rgb:  var(--t-accent-rgb); }   /* teal   */
+
+.hub-sys-chip .hub-sys-name {
+  flex: 1 1 auto;            /* takes up the middle of the row */
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(var(--t-overlay-rgb),0.92);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  text-align: left;
+}
+/* TWO separate buttons (not a segmented pill) inside the chip.
+ *
+ * The element has class="seg-pair hub-seg" so the .seg-pair rules in
+ * page1.scss (background / border / box-shadow / overflow:hidden /
+ * gap:0 !important) would normally fuse them into one pill. The
+ * overrides below neutralise that pill look and let the two buttons
+ * stand on their own with a 4px gap. */
+/* The ON/OFF pair — sits on the RIGHT of each horizontal row.
+ * The element has class="seg-pair hub-seg"; .seg-pair (page1.scss) tries
+ * to fuse the two buttons into one pill — these overrides make them
+ * render as two separate pill buttons with a 6px gap. */
+.hub-seg {
+  flex: 0 0 auto !important;     /* don't stretch */
+  width: auto !important;        /* override .seg-pair width:100% */
+  gap: 6px !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+.hub-seg > button {
+  flex: 0 0 56px !important;     /* equal-width ON/OFF (so OPEN/CLOSE on Shades doesn't shift) */
+  border: 1px solid rgba(var(--t-overlay-rgb),0.14) !important;
+  border-radius: 8px !important;
+  font-size: 11px;
+  min-height: 30px;
+  padding: 4px 6px;
+  letter-spacing: 0.4px;
+}
+.hub-seg > button + button { border-left: 1px solid rgba(var(--t-overlay-rgb),0.14) !important; }
+
+/* Horizontal-rows layout adapts naturally; no grid override needed. */
+
+/* ── Shutdown House  (per-floor, whole-house, master kill) ───────────────── */
+.hub-shutdown-floor {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(var(--t-overlay-rgb),0.025);
+  border: 1px solid rgba(var(--t-overlay-rgb),0.06);
+}
+.hub-shutdown-allrow {
+  background: rgba(var(--t-accent-rgb), 0.06);
+  border-color: rgba(var(--t-accent-rgb), 0.20);
+}
+.hub-shutdown-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.hub-shutdown-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.hub-sd-btn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--t-accent-rgb), 0.22);
+  background: rgba(var(--t-accent-rgb), 0.06);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  min-height: 40px;
+  touch-action: manipulation;
+  transition: background .15s, border-color .15s, color .15s, transform .08s;
+}
+.hub-sd-btn:hover {
+  background: rgba(var(--t-accent-rgb), 0.16);
+  border-color: rgba(var(--t-accent-rgb), 0.55);
+  color: var(--text);
+}
+.hub-sd-btn:active { transform: scale(0.97); }
+
+.hub-master-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+  color: var(--on-accent);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+  min-height: 56px;
+  touch-action: manipulation;
+  box-shadow: 0 6px 18px rgba(var(--t-accent-rgb), 0.32);
+  transition: transform .18s, box-shadow .22s, border-color .2s;
+}
+.hub-master-btn .svg-ico { color: var(--on-accent); font-size: 18px; }
+.hub-master-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(var(--t-accent-rgb), 0.5);
+}
+.hub-master-btn:hover .svg-ico { color: var(--on-accent); }
+.hub-master-btn:active { transform: scale(0.98); }
+
+/* Tighten on small panels */
+@media (max-width: 480px) {
+  .hub-modes-grid    { grid-template-columns: repeat(3, 1fr); }
+  .hub-rooms-grid    { grid-template-columns: repeat(2, 1fr); }
+  .hub-shutdown-row  { grid-template-columns: repeat(2, 1fr); }
+  .hub-mode-btn      { min-height: 80px; padding: 12px 6px; }
+  .hub-room-card     { min-height: 96px; padding: 12px 12px; gap: 18px; }
+  .hub-time          { font-size: 28px; }
+  .hub-master-btn    { font-size: 12px; letter-spacing: 1px; }
+}
+
+/* ── Mode-confirm popup (hmc-*) ──────────────────────────────────────────── */
+.hmc-overlay {
+  position: fixed; inset: 0; z-index: 9998;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.22s;
+}
+.hmc-overlay.open { opacity: 1; pointer-events: all; }
+
+.hmc-dialog {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.hmc-dialog.open { pointer-events: all; }
+
+.hmc-dialog-inner {
+  --hmc-rgb: var(--t-accent2-rgb);
+  min-width: 280px; max-width: 360px; width: 90%;
+  padding: 28px 24px 24px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, var(--card-solid) 0%, var(--card-solid) 100%);
+  border: 1px solid rgba(var(--hmc-rgb), 0.38);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(var(--t-overlay-rgb), 0.05) inset;
+  text-align: center;
+  opacity: 0; transform: scale(0.90) translateY(12px);
+  transition: opacity 0.26s cubic-bezier(.4, 0, .2, 1),
+              transform 0.26s cubic-bezier(.4, 0, .2, 1);
+}
+.hmc-dialog.open .hmc-dialog-inner { opacity: 1; transform: scale(1) translateY(0); }
+
+.hmc-icon {
+  display: block; font-size: 40px; line-height: 1; margin-bottom: 14px;
+  filter: drop-shadow(0 4px 14px rgba(var(--hmc-rgb), 0.45));
+}
+.hmc-title {
+  font-size: 18px; font-weight: 700; color: var(--text);
+  letter-spacing: -0.3px; margin-bottom: 8px;
+}
+.hmc-msg {
+  font-size: 13px; color: var(--text2); line-height: 1.58; margin-bottom: 22px;
+}
+.hmc-actions { display: flex; gap: 10px; }
+.hmc-btn {
+  flex: 1; padding: 12px 8px; border-radius: 12px;
+  font-family: 'Sora', sans-serif; font-size: 13px; font-weight: 700;
+  letter-spacing: 0.4px; cursor: pointer; touch-action: manipulation;
+  transition: transform 0.12s, background 0.18s, border-color 0.18s, box-shadow 0.2s;
+}
+.hmc-btn:active { transform: scale(0.95); }
+.hmc-btn-cancel {
+  background: rgba(var(--t-overlay-rgb), 0.06);
+  border: 1px solid rgba(var(--t-overlay-rgb), 0.14);
+  color: rgba(var(--t-overlay-rgb), 0.78);
+}
+.hmc-btn-cancel:hover {
+  background: rgba(var(--t-overlay-rgb), 0.10);
+  border-color: rgba(var(--t-overlay-rgb), 0.28);
+  color: var(--text);
+}
+.hmc-btn-confirm {
+  background: rgba(var(--hmc-rgb), 0.20);
+  border: 1px solid rgba(var(--hmc-rgb), 0.55);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(var(--hmc-rgb), 0.20);
+}
+.hmc-btn-confirm:hover {
+  background: rgba(var(--hmc-rgb), 0.38);
+  border-color: rgba(var(--hmc-rgb), 0.90);
+  box-shadow: 0 6px 20px rgba(var(--hmc-rgb), 0.38);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   APPEARANCE — theme dropdown (top-right of the home topbar)
+   The trigger shows the active theme; tapping it opens a menu with the
+   three themes. home.js toggles .open and marks the active .theme-dd-item.
+   ════════════════════════════════════════════════════════════════════ */
+.theme-dd {
+  position: relative;
+  flex: none;
+  display: inline-flex;   /* shrink-wrap to the trigger so the menu anchors tight */
+ 
+}
+.theme-dd-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.theme-dd-trigger:hover { border-color: var(--border-hi); }
+.theme-dd-caret {
+  font-size: 10px;
+  color: var(--text2);
+  transition: transform .2s;
+}
+.theme-dd.open .theme-dd-caret { transform: rotate(180deg); }
+
+/* Small round swatch — shares the --blue/--dark/--light gradients below. */
+.theme-dd-sw {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid rgba(var(--t-overlay-rgb), 0.28);
+}
+
+/* Dropdown menu — anchored to the right edge of the trigger. */
+.theme-dd-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 144px;
+  min-width: 0;
+  padding: 6px;
+  background: var(--card-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.48);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition: opacity .16s, transform .16s, visibility .16s;
+  z-index: 60;
+}
+.theme-dd.open .theme-dd-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.theme-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.theme-dd-item:hover { background: rgba(var(--t-overlay-rgb), 0.07); }
+.theme-dd-item.active {
+  border-color: var(--accent);
+  background: rgba(var(--t-accent-rgb), 0.14);
+}
+
+/* Theme preview gradients — used by both the trigger and menu swatches.
+   Centre disc = that theme's page background; ring = its accent gradient.
+   Keep these in sync with the --t-* tokens in _theme-additions.scss. */
+.hub-theme-swatch--blue {
+  background:
+    radial-gradient(circle at 50% 50%, #0a0e1a 0 40%, transparent 41%),
+    linear-gradient(135deg, #a78bfa, #2dd4bf);
+}
+.hub-theme-swatch--dark {
+  background:
+    radial-gradient(circle at 50% 50%, #0a0c10 0 40%, transparent 41%),
+    linear-gradient(135deg, #3b82f6, #2563eb);
+}
+.hub-theme-swatch--light {
+  background:
+    radial-gradient(circle at 50% 50%, #f4f6f9 0 40%, transparent 41%),
+    linear-gradient(135deg, #3b82f6, #2563eb);
+}

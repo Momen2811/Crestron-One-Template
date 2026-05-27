@@ -1,413 +1,275 @@
 <!DOCTYPE html>
 <html lang="en">
+<!--
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  page1.html  —  Smart Home Control  —  PAGE 1                        │
+  │                                                                      │
+  │  HOW TO COPY THIS FILE FOR ANOTHER PAGE                              │
+  │  ------------------------------------------------------------------  │
+  │  1.  Save as `page<N>.html` (e.g. page2.html).                       │
+  │  2.  Find-and-replace IN THAT NEW FILE only:                         │
+  │           page1.scss   →   page<N>.scss      (e.g. page2.scss)       │
+  │           joins1.js    →   joins<N>.js       (e.g. joins2.js)        │
+  │           page1.js     →   page<N>.js        (e.g. page2.js)         │
+  │           id="page1-page"  →  id="page<N>-page"                      │
+  │           comments mentioning "page1" / "Page 1" / "J1.*"            │
+  │           (functional code references — none, the .js handles all)   │
+  │  3.  Customize the visible content (areas, shades, AC) per page —    │
+  │      every spot to edit is flagged with a ▸▸▸ EDIT-FOR-PAGE-N        │
+  │      comment below.                                                  │
+  └──────────────────────────────────────────────────────────────────────┘
+-->
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Smart Home Control</title>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="page1.css">
+  <!-- ▸▸▸ EDIT-FOR-PAGE-N: rename to page<N>.scss for the matching SCSS file. -->
 
-  <!-- ══════════════════════════════════════════════════════════════════════
-       LIGHT PRESETS CATALOG
-       Every preset the app supports is declared here ONCE.
-         • key    : the name used in data-presets on each card (and in
-                    the data-join-<key> attribute on that card)
-         • label  : text shown on the button and in the status pill
-         • icon   : emoji shown on the button
-         • color  : CSS color theme (see .preset-btn.preset-<color> in
-                    page1.css — available: on, off, dim, relax, tv,
-                    guest, service, generic)
+  <!-- CrComLib + WebXPanel are bundled by webpack and loaded by index.html.
+       The WebXPanel connection is initialized once by the shell template
+       (useWebXPanel:true in app/project-config.json triggers
+       app/template/libraries/webxpanel.js). Do not re-initialize here. -->
 
-       TO RENAME A PRESET   → edit its `label` below.
-       TO REMOVE A PRESET   → delete its entry here AND remove the key
-                              from every card's data-presets attribute.
-       TO ADD A NEW PRESET  → add a new entry here, then for each room
-                              that should offer it, add the key to that
-                              card's data-presets AND add a matching
-                              data-join-<key>="NN" pointing at the
-                              Crestron digital join to pulse.
-       ══════════════════════════════════════════════════════════════════════ -->
-  <script>
-    window.LIGHT_PRESETS = {
-      on:      { label: 'All On',    icon: '💡', color: 'on'      },
-      off:     { label: 'All Off',   icon: '🌙', color: 'off'     },
-      dim:     { label: 'Dim',       icon: '⭐', color: 'dim'     },
-      relax:   { label: 'Relax',     icon: '🌅', color: 'relax'   },
-      tv:      { label: 'TV',        icon: '📺', color: 'tv'      },
-      guest:   { label: 'Guest',     icon: '👥', color: 'guest'   },
-      service: { label: 'Service',   icon: '🧹', color: 'service' },
-      p10:     { label: 'Preset 10', icon: '①',  color: 'generic' },
-      p11:     { label: 'Preset 11', icon: '②',  color: 'generic' },
-      p12:     { label: 'Preset 12', icon: '③',  color: 'generic' },
-      p13:     { label: 'Preset 13', icon: '④',  color: 'generic' },
-      p14:     { label: 'Preset 14', icon: '⑤',  color: 'generic' },
-      p15:     { label: 'Preset 15', icon: '⑥',  color: 'generic' }
-    };
-  </script>
+  <!-- weather-card hotfix removed — card replaced by home-ctrl-bar -->
 </head>
 
 <body>
-  <div style="position:relative;min-height:100%;background:#0d1117;z-index:0;">
-    <div class="bg-mesh"></div>
+  <div style="position:relative;min-height:100%;background:var(--bg);z-index:0;">
+    <div class="bg-mesh bg-mesh--room"></div>
 
+    <!-- ▸▸▸ EDIT-FOR-PAGE-N: change id="page1-page" to id="page<N>-page".
+         This id is referenced by the CH5 shell's project-config.json
+         (pageName) and by the SCSS top-level scope. The id is ALSO what
+         drives the per-room aurora tint via #page<N>-page in page1.scss
+         (--room-rgb / --room-rgb-2). -->
     <section id="page1-page" class="details-container">
       <div class="page-wrap">
 
-        <!-- Status bar -->
-        <div class="statusbar">
-          <span class="clk" id="clockDisplay">9:41</span>
-          <div class="icons"><span>📶</span><span>🔋</span></div>
+        <!-- TOPBAR — room tag + live CrComLib connection indicator.
+             Replaces the fake phone status bar (clock 9:41 + battery)
+             which was misleading on a wall-mounted touchpanel. -->
+        <div class="topbar">
+          <button class="back-home" id="backToHome-page1"
+                  type="button"
+                  aria-label="Back to home"
+                  title="Back to home"
+                  onclick="goHome_page1()">
+            <span class="svg-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg>
+            </span>
+          </button>
+          <span class="room-tag">
+            <span class="svg-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>
+            </span>
+            <span class="room-tag-name">Master Bedroom</span>
+          </span>
+          <button class="shutdown-all"
+                  type="button"
+                  aria-label="Shutdown all rooms"
+                  title="Shutdown all rooms"
+                  onclick="shutdownAll(J1.SYSTEM.SHUTDOWN, J1.SYSTEM.SHUTDOWN_WITH_SHUTTER)">
+            <span class="svg-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+            </span>
+            <span class="shutdown-all-lbl">Shutdown</span>
+          </button>
         </div>
 
-        <!-- Greeting -->
-        <div class="greeting">
-          <div class="avatar">S</div>
-          <div>
-            <div class="gname">Hello, Ahmed Ehab</div>
-            <div class="gsub">20 devices currently on</div>
+        <!-- GREETING — modernized, room-focused. Old greeting hardcoded
+             "Hello, Aya Hisham" + fabricated "20 devices currently on";
+             both lied about real state, so they are gone. -->
+        <div class="greeting greeting--modern">
+          <div class="gr-icon" aria-hidden="true">
+            <span class="svg-ico" style="font-size:22px">
+              <svg viewBox="0 0 24 24"><path d="M3 20v-5a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v5"/><path d="M3 18h18"/><path d="M7 12V9a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v3"/><path d="M12 12V9a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v3"/></svg>
+            </span>
           </div>
-          <div class="bell">🔔</div>
-        </div>
-
-        <!-- Energy summary -->
-        <div class="energy-card">
-          <div class="energy-label">Current Energy Usage</div>
-          <div class="energy-val-row">
-            <span class="energy-value">2.1</span>
-            <span class="energy-unit">kW</span>
-          </div>
-          <div class="energy-chips">
-            <div class="echip">
-              <span class="eico">⚡</span>
-              <div><div class="ev">48 kWh</div><div class="el">24-Hr Usage</div></div>
-            </div>
-            <div class="echip">
-              <span class="eico">💰</span>
-              <div><div class="ev">$5.20</div><div class="el">Est. Cost</div></div>
-            </div>
+          <div class="gr-text">
+            <div class="gr-room">Master Bedroom</div>
+            <div class="gr-sub">Tap a control bar widget to begin</div>
           </div>
         </div>
 
-        <!-- Tab Navigation -->
+        <!-- Room Modes — page-level scene bar (Morning / Relax / Dressing / Sleep).
+             Moved out of the Lights widget so it stays visible on every tab. -->
+        <div class="lights-global-bar">
+          <button class="lglobal-btn lglobal-morning"  id="globalMorning-page1">🌅 Morning Mode</button>
+          <button class="lglobal-btn lglobal-relax"    id="globalRelax-page1">🌙 Evening Mode</button>
+          <button class="lglobal-btn lglobal-dressing" id="globalDressing-page1">🧖 Dim Mode</button>
+          <button class="lglobal-btn lglobal-sleep"    id="globalSleep-page1">🛏️ Sleep Mode</button>
+        </div>
+
+        <!-- Tab Navigation
+             ▸▸▸ EDIT-FOR-PAGE-N: per-page widget mix is controlled here.
+             Remove a button below to drop that widget from this page;
+             also remove its <div id="widget-...-page1"> further down.        -->
         <div class="tab-nav">
-          <button class="tab-btn active" data-widget="lights" onclick="switchWidget('lights', this)">💡 Lights</button>
-          <button class="tab-btn" data-widget="tv" onclick="switchWidget('tv', this)">📺 TV</button>
-          <button class="tab-btn" data-widget="shades" onclick="switchWidget('shades', this)">🪟 Shades</button>
-          <button class="tab-btn" data-widget="ac" onclick="switchWidget('ac', this)">❄️ AC</button>
+          <button class="tab-btn active" data-widget="lights" onclick="switchWidget_page1('lights', this)">💡 Lights</button>
+          <button class="tab-btn" data-widget="shades" onclick="switchWidget_page1('shades', this)">🪟 Shutters</button>
+          <button class="tab-btn" data-widget="tv" onclick="switchWidget_page1('tv', this)">📺 TV</button>
+          <button class="tab-btn" data-widget="music" onclick="switchWidget_page1('music', this)">🎵 Music</button>
         </div>
 
         <!-- Widgets Container -->
-        <div id="widgets-container">
+        <div id="widgets-container-page1">
 
           <!-- ==================== LIGHTS WIDGET ==================== -->
-          <div id="widget-lights" class="widget active">
+          <div id="widget-lights-page1" class="widget active">
 
-            <!-- Header -->
+            <!-- Header + interaction hint. The hint helps users discover the
+                 long-press → popup gesture (otherwise hidden); the badge to
+                 the right shows live "X on" count from setAreaVisual. -->
             <div class="sec-hdr">
               <span class="sec-title">Lighting Areas</span>
-              <span class="sec-badge" id="lightsOnCount">0 on</span>
+              <span class="sec-badge" id="lightsOnCount-page1">0 on</span>
             </div>
+           
 
-            <!-- Global Presets -->
-            <div class="lights-global-bar">
-              <button class="lglobal-btn lglobal-on"    id="globalAllOn">💡 All On</button>
-              <button class="lglobal-btn lglobal-relax" id="globalRelax">🌅 Relax</button>
-              <button class="lglobal-btn lglobal-dim"   id="globalDim">⭐ Dim All</button>
-              <button class="lglobal-btn lglobal-off"   id="globalAllOff">🌙 All Off</button>
-            </div>
 
             <!-- ══════════════════════════════════════════════════════════════
-                 AREA CARDS GRID — PILL LAYOUT (v5)
-                 ══════════════════════════════════════════════════════════════
-                 Each <div class="area-card"> is a self-contained capsule:
-
-                   <div class="area-card" data-...>
-                     <button class="acard-bulb" ...>💡</button>  ← ON/OFF
-                     <div class="acard-name">Room Name</div>
-                   </div>
-
-                 INTERACTION:
-                   • TAP the lamp (💡) → pulses on/off preset → amber glow
-                     when lit, dim when off.
-                   • HOLD the card body for ~2 seconds → opens the
-                     detail popup with all presets + dimmer. A blue
-                     progress fill sweeps left→right during the hold.
-
-                 DATA ATTRIBUTES:
-                   data-area       = unique key (used for IDs)
-                   data-label      = display name shown on card + popup
-                   data-presets    = COMMA-SEPARATED list of preset keys from
-                                     window.LIGHT_PRESETS (see <head>).
-                                     The popup shows one button per key in
-                                     this list, in the order listed.
-                   data-join-<key> = Crestron digital join pulsed when the
-                                     matching preset button (or the lamp)
-                                     is pressed. Feedback join = this + 100.
-                                     Omit to disable that preset in this room.
-                   data-analog     = analog send join for the dimmer
-                                     (omit → dimmer section hidden)
-                   data-fb         = analog feedback join for dimmer
-
-                 CUSTOMIZE PER-ROOM:
-                   • To offer a different preset list in a room, edit that
-                     card's data-presets (e.g., "on,off,dim,relax,tv,guest").
-                   • To rewire a preset's join, edit data-join-<key>.
-                   • To drop a preset for this room only, remove it from
-                     data-presets (and optionally clear data-join-<key>).
-                   • To rename a preset globally, edit window.LIGHT_PRESETS
-                     in <head>. To rename it only for one room, keep the
-                     key in data-presets but add data-label-<key>="My Name"
-                     on that card.
-                   • To change the long-press duration, edit LONG_PRESS_MS
-                     at the top of page1.js (default 600ms).
+                 LIGHTS AREAS — one row per area, 4 buttons per row.
+                 Each button pulses ONE digital join via the inline-onclick
+                 bridge:  tap_page1('LIGHTS_<AREA>.<KEY>')
+                 ────────────────────────────────────────────────────────────
+                 To rewire any button: edit joins1.js → LIGHTS_<AREA>.<KEY>.
+                 To add an area:       add a new <div class="area-row" …> below
+                                        AND a matching LIGHTS_<NAME> section
+                                        in joins1.js.
+                 To remove an area:    delete its row below (joins can stay).
                  ══════════════════════════════════════════════════════════════ -->
-            <div class="area-grid" id="areaGrid">
-
-              <!-- ═════════ AREA 1 : BEDROOM ═════════
-                   5 presets: All On, All Off, Dim, Relax, TV.
-                   TAP the lamp to toggle ON/OFF.
-                   HOLD the card (2s) to open the detail popup. -->
-              <div class="area-card" id="ac-Bedroom"
-                   data-area="Bedroom"
-                   data-label="Bedroom"
-                   data-presets="on,off,dim,relax,tv"
-                   data-join-on="10"
-                   data-join-off="13"
-                   data-join-dim="11"
-                   data-join-relax="12"
-                   data-join-tv="26"
-                   data-analog="31"
-                   data-fb="30">
-                <button type="button" class="acard-bulb" id="abulb-Bedroom"
-                        aria-label="Toggle Bedroom lights"
-                        onclick="handleAreaLampToggle('Bedroom', event)">💡</button>
-                <div class="acard-name">Bedroom</div>
+            <div class="lights-areas-grid">
+              <div class="area-row" data-area="bedroom" data-label="Bedroom" data-icon="💡">
+                <span class="area-row-name">Bedroom</span>
+                <div class="area-row-btns">
+                  <button class="area-btn ab-on"    onclick="tap_page1('LIGHTS_BEDROOM.ON')">All On</button>
+                  <button class="area-btn ab-relax"   onclick="tap_page1('LIGHTS_BEDROOM.RELAX')">Relax</button>
+                  <button class="area-btn ab-dim" onclick="tap_page1('LIGHTS_BEDROOM.DIM')">Dim</button>
+                  <button class="area-btn ab-off"   onclick="tap_page1('LIGHTS_BEDROOM.OFF')">All Off</button>
+                </div>
               </div>
-
-              <!-- ═════════ AREA 2 : BATHROOM ═════════
-                   5 presets: All On, All Off, Dim, Relax, Guest. -->
-              <div class="area-card" id="ac-Bathroom"
-                   data-area="Bathroom"
-                   data-label="Bathroom"
-                   data-presets="on,off,dim,relax,guest"
-                   data-join-on="14"
-                   data-join-off="17"
-                   data-join-dim="15"
-                   data-join-relax="16"
-                   data-join-guest="27"
-                   data-analog="32"
-                   data-fb="33">
-                <button type="button" class="acard-bulb" id="abulb-Bathroom"
-                        aria-label="Toggle Bathroom lights"
-                        onclick="handleAreaLampToggle('Bathroom', event)">💡</button>
-                <div class="acard-name">Bathroom</div>
+              <div class="area-row" data-area="bathroom" data-label="Bathroom" data-icon="🚿">
+                <span class="area-row-name">Bathroom</span>
+                <div class="area-row-btns">
+                  <button class="area-btn ab-on"    onclick="tap_page1('LIGHTS_BATHROOM.ON')">All On</button>
+                  <button class="area-btn ab-relax"   onclick="tap_page1('LIGHTS_BATHROOM.RELAX')">Relax</button>
+                  <button class="area-btn ab-dim" onclick="tap_page1('LIGHTS_BATHROOM.DIM')">Dim</button>
+                  <button class="area-btn ab-off"   onclick="tap_page1('LIGHTS_BATHROOM.OFF')">All Off</button>
+                </div>
               </div>
-
-              <!-- ═════════ AREA 3 : DRESSING ═════════
-                   4 presets: All On, All Off, Dim, Service. -->
-              <div class="area-card" id="ac-Dressing"
-                   data-area="Dressing"
-                   data-label="Dressing"
-                   data-presets="on,off,dim,service"
-                   data-join-on="18"
-                   data-join-off="21"
-                   data-join-dim="19"
-                   data-join-service="28"
-                   data-analog="34"
-                   data-fb="35">
-                <button type="button" class="acard-bulb" id="abulb-Dressing"
-                        aria-label="Toggle Dressing lights"
-                        onclick="handleAreaLampToggle('Dressing', event)">💡</button>
-                <div class="acard-name">Dressing</div>
+              <div class="area-row" data-area="dressing" data-label="Dressing" data-icon="👗">
+                <span class="area-row-name">Dressing</span>
+                <div class="area-row-btns">
+                  <button class="area-btn ab-on"    onclick="tap_page1('LIGHTS_DRESSING.ON')">All On</button>
+                  <button class="area-btn ab-relax"   onclick="tap_page1('LIGHTS_DRESSING.RELAX')">Relax</button>
+                  <button class="area-btn ab-dim" onclick="tap_page1('LIGHTS_DRESSING.DIM')">Dim</button>
+                  <button class="area-btn ab-off"   onclick="tap_page1('LIGHTS_DRESSING.OFF')">All Off</button>
+                </div>
               </div>
-
-              <!-- ═════════ AREA 4 : READING LIGHT ═════════
-                   4 presets: All On, All Off, Dim, Relax. -->
-              <div class="area-card" id="ac-Reading"
-                   data-area="Reading"
-                   data-label="Reading Light"
-                   data-presets="on,off,dim,relax"
-                   data-join-on="22"
-                   data-join-off="25"
-                   data-join-dim="23"
-                   data-join-relax="24"
-                   data-analog="36"
-                   data-fb="37">
-                <button type="button" class="acard-bulb" id="abulb-Reading"
-                        aria-label="Toggle Reading lights"
-                        onclick="handleAreaLampToggle('Reading', event)">💡</button>
-                <div class="acard-name">Reading Light</div>
+              <div class="area-row" data-area="Reading Light" data-label="Reading Light" data-icon="📖">
+                <span class="area-row-name">Reading Light</span>
+                <div class="area-row-btns">
+                  <button class="area-btn ab-on"    onclick="tap_page1('LIGHTS_READING.ON')">ON</button>
+                  <button class="area-btn ab-off"   onclick="tap_page1('LIGHTS_READING.OFF')">OFF</button>
+                </div>
               </div>
-
-            </div><!-- /area-grid -->
-
+            </div>
           </div><!-- /widget-lights -->
 
 
-          <!-- ==================== AREA DETAIL POPUP (Centered in viewport) ==================== -->
-          <div class="area-panel-overlay" id="areaPanelOverlay" onclick="closeAreaPanel()"></div>
+          <!-- ==================== TV WIDGET ==================== -->
+          <div id="widget-tv-page1" class="widget">
 
-          <div class="area-panel" id="areaPanel" role="dialog" aria-modal="true">
+            <!-- ─── MAIN TV VIEW ─── shown by default; hidden when one of the
+                 5 app launchers is tapped. The app-remote view below takes
+                 its place inline (no popup, no overlay). -->
+            <div class="tv-main-view" id="tvMainView-page1">
 
-            <!-- Panel header -->
-            <div class="panel-hdr">
-              <div class="panel-ico" id="panelIco">💡</div>
-              <div>
-                <div class="panel-title" id="panelTitle">Living Room</div>
-                <div class="panel-sub" id="panelSub">Lighting Control</div>
+              <div class="sec-hdr">
+                <span class="sec-title">TV & Media Center</span>
+                <span class="sec-badge">Connected</span>
               </div>
-              <button class="panel-close" onclick="closeAreaPanel()">✕</button>
-            </div>
 
-            <!-- Status pill -->
-            <div class="panel-status-row">
-              <div class="spill sp-off" id="panelStatusPill">
-                <span class="sdot"></span>
-                <span id="panelStatusText">OFF</span>
+              <!-- Quick App Launchers — tap to swap this view for the
+                   App Remote view. Joins live in joins1.js → APPS.<APP_KEY>. -->
+              <div class="quick-grid app-launcher-grid">
+                <button class="qbtn app-launcher" data-app="osn"
+                        onclick="openAppPanel_page1('osn')"><span class="qi">🛰️</span>OSN</button>
+                <button class="qbtn app-launcher" data-app="bein"
+                        onclick="openAppPanel_page1('bein')"><span class="qi">⚽</span>BeIN Sports</button>
+                <button class="qbtn app-launcher" data-app="freesat"
+                        onclick="openAppPanel_page1('freesat')"><span class="qi">📡</span>Freesat</button>
               </div>
-            </div>
 
-            <!-- Preset Buttons — populated dynamically from the opened
-                 card's data-presets list. See window.LIGHT_PRESETS in
-                 <head> for the master catalog. -->
-            <div class="preset-grid" id="panelPresetGrid"></div>
+            </div><!-- /tv-main-view -->
 
-            <!-- Dimmer Section (shown only if area has analog join) -->
-            <div class="panel-dimmer" id="panelDimmer">
-              <div class="dimmer-top">
-                <span class="dico">🎚️</span>
-                <span class="dtitle">Dimmer</span>
-                <div class="dpct-wrap">
-                  <div class="dpct" id="panelDimValue">50</div>
-                  <div class="djoin" id="panelDimJoin">Analog Join —</div>
+
+            <!-- ─── APP REMOTE VIEW ─── hidden by default; shown when one of
+                 the 5 quick-launch buttons is tapped. openAppPanel_page1()
+                 sets the title + rewires the dpad/keypad onclick handlers
+                 to pulse joins from J1.APPS.<APP_KEY>. Tapping "← Back to TV"
+                 swaps back to the main view above. -->
+            <div class="tv-app-view" id="tvAppView-page1" hidden>
+
+              <div class="app-view-hdr">
+                <button class="app-back-btn" onclick="closeAppPanel_page1()">
+                  <span class="back-arrow">←</span> Back to TV
+                </button>
+                <div class="app-view-title-row">
+                  <span class="app-view-ico" id="appPanelIco-page1">📺</span>
+                  <div>
+                    <div class="app-view-title" id="appPanelTitle-page1">App Remote</div>
+                    <div class="app-view-sub" id="appPanelSub-page1">Tap a button to control</div>
+                  </div>
                 </div>
               </div>
 
-              <!-- Arc dial -->
-              <div class="dial-wrap">
-                <svg width="200" height="118" viewBox="0 0 200 118" style="overflow:visible">
-                  <defs>
-                    <linearGradient id="pdg" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stop-color="#fbbf24"/>
-                      <stop offset="100%" stop-color="#f59e0b"/>
-                    </linearGradient>
-                    <filter id="pyglow" x="-20%" y="-20%" width="140%" height="140%">
-                      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
-                      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-                    </filter>
-                  </defs>
-                  <path d="M 24 105 A 76 76 0 0 1 176 105" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="9" stroke-linecap="round"/>
-                  <path id="panel-arc-fill" d="M 24 105 A 76 76 0 0 1 100.1 29" fill="none" stroke="url(#pdg)" stroke-width="9" stroke-linecap="round" filter="url(#pyglow)"/>
-                  <text x="100" y="82" font-family="JetBrains Mono, monospace" font-size="22" font-weight="700" fill="#fbbf24" text-anchor="middle" id="panel-arc-label">50%</text>
-                  <text x="100" y="100" font-family="Sora, sans-serif" font-size="10" fill="rgba(255,255,255,0.35)" text-anchor="middle">dim level</text>
-                </svg>
-              </div>
-
-              <input type="range" class="dim-range" id="panelDimSlider" min="0" max="100" value="50">
-              <div class="range-lbx"><span>0%</span><span>Analog Join</span><span>100%</span></div>
-              <p class="dim-hint" id="panelDimHint">Feedback ← Analog Join —</p>
-            </div><!-- /panel-dimmer -->
-
-          </div><!-- /area-panel -->
-
-
-          <!-- ==================== TV WIDGET ==================== -->
-          <div id="widget-tv" class="widget">
-
-            <div class="sec-hdr">
-              <span class="sec-title">TV & Media Center</span>
-              <span class="sec-badge">Connected</span>
-            </div>
-
-            <!-- Quick Actions -->
-            <div class="quick-grid">
-              <button class="qbtn q-on" id="tvPowerBtn"><span class="qi">📺</span>Power</button>
-              <button class="qbtn" id="tvNetflixBtn"><span class="qi">📼</span>Netflix</button>
-              <button class="qbtn" id="tvHdmiBtn"><span class="qi">📡</span>HDMI 1</button>
-            </div>
-
-            <!-- SUB NAVIGATION (TV Controls ↔ Favorites) -->
-            <div class="sub-tab-nav">
-              <button class="sub-tab-btn active" data-subwidget="tv-controls" onclick="switchTVSubWidget('tv-controls', this)">TV Controls</button>
-              <button class="sub-tab-btn" data-subwidget="tv-favorites" onclick="switchTVSubWidget('tv-favorites', this)">Favorites</button>
-            </div>
-
-            <!-- TV CONTROLS SUB-WIDGET -->
-            <div id="tv-controls" class="tv-subwidget active">
-
-              <div class="sec-hdr">
-                <span class="sec-title">TV Remote</span>
-              </div>
-
-              <!-- Power & Source -->
+              <!-- Power — same layout as tvPowerBtn2 in TV controls -->
               <div class="tv-header-controls">
-                <button id="tvPowerBtn2" class="tv-power-btn">⏻ Power</button>
-                <button id="tvSourceBtn" class="tv-source-btn">📺 Source</button>
+                <button class="tv-power-btn" id="appPowerBtn-page1">⏻ Power</button>
               </div>
 
-              <!-- Media Controls Grid -->
+              <!-- Vol / Mute / CH — same 5-button grid as TV controls -->
               <div class="media-controls-grid">
-                <button class="media-btn" id="tvVolUpBtn">🔊 Vol +</button>
-                <button class="media-btn" id="tvVolDownBtn">🔊 Vol -</button>
-                <button class="media-btn" id="tvMuteBtn">🔇 Mute</button>
-                <button class="media-btn" id="tvChUpBtn">📺 CH +</button>
-                <button class="media-btn" id="tvChDownBtn">📺 CH -</button>
+                <button class="media-btn" id="appVolUpBtn-page1">🔊 Vol +</button>
+                <button class="media-btn" id="appVolDownBtn-page1">🔊 Vol -</button>
+                <button class="media-btn" id="appMuteBtn-page1">🔇 Mute</button>
+                <button class="media-btn" id="appChUpBtn-page1">📺 CH +</button>
+                <button class="media-btn" id="appChDownBtn-page1">📺 CH -</button>
               </div>
 
               <!-- D-Pad -->
               <div class="dpad-container">
-                <button class="dpad-btn dpad-up" id="tvDpadUp">▲</button>
-                <button class="dpad-btn dpad-left" id="tvDpadLeft">◀</button>
-                <button class="dpad-btn dpad-center" id="tvDpadOk">OK</button>
-                <button class="dpad-btn dpad-right" id="tvDpadRight">▶</button>
-                <button class="dpad-btn dpad-down" id="tvDpadDown">▼</button>
+                <button class="dpad-btn dpad-up"     id="appDpadUp-page1">▲</button>
+                <button class="dpad-btn dpad-left"   id="appDpadLeft-page1">◀</button>
+                <button class="dpad-btn dpad-center" id="appDpadOk-page1">OK</button>
+                <button class="dpad-btn dpad-right"  id="appDpadRight-page1">▶</button>
+                <button class="dpad-btn dpad-down"   id="appDpadDown-page1">▼</button>
               </div>
 
               <!-- Numeric Keypad -->
               <div class="keypad">
-                <button class="keypad-btn" id="tvKey1">1</button>
-                <button class="keypad-btn" id="tvKey2">2</button>
-                <button class="keypad-btn" id="tvKey3">3</button>
-                <button class="keypad-btn" id="tvHome">Home</button>
+                <button class="keypad-btn" id="appKey1-page1">1</button>
+                <button class="keypad-btn" id="appKey2-page1">2</button>
+                <button class="keypad-btn" id="appKey3-page1">3</button>
+                <button class="keypad-btn" id="appHome-page1">Return</button>
 
-                <button class="keypad-btn" id="tvKey4">4</button>
-                <button class="keypad-btn" id="tvKey5">5</button>
-                <button class="keypad-btn" id="tvKey6">6</button>
-                <button class="keypad-btn" id="tvMenu">Menu</button>
+                <button class="keypad-btn" id="appKey4-page1">4</button>
+                <button class="keypad-btn" id="appKey5-page1">5</button>
+                <button class="keypad-btn" id="appKey6-page1">6</button>
+                <button class="keypad-btn" id="appMenu-page1">Menu</button>
 
-                <button class="keypad-btn" id="tvKey7">7</button>
-                <button class="keypad-btn" id="tvKey8">8</button>
-                <button class="keypad-btn" id="tvKey9">9</button>
-                <button class="keypad-btn" id="tvChList">CHlist</button>
+                <button class="keypad-btn" id="appKey7-page1">7</button>
+                <button class="keypad-btn" id="appKey8-page1">8</button>
+                <button class="keypad-btn" id="appKey9-page1">9</button>
+                <button class="keypad-btn" id="appBack-page1">Exit</button>
 
-                <button class="keypad-btn" id="tvKey0">0</button>
-                <button class="keypad-btn" id="tvKeyEnter">Enter</button>
-                <button class="keypad-btn" id="tvBack">Back</button>
-              </div>
+                <button class="keypad-btn keypad-btn--wide" id="appKey0-page1">0</button>
+              </div><!-- /.keypad -->
 
-            </div>
+            </div><!-- /tv-app-view -->
 
-            <!-- FAVORITES SUB-WIDGET -->
-            <div id="tv-favorites" class="tv-subwidget">
-              <div class="sec-hdr">
-                <span class="sec-title">Favorites</span>
-              </div>
-
-              <div class="favorites-grid">
-                <button class="fav-btn">Netflix</button>
-                <button class="fav-btn">YouTube</button>
-                <button class="fav-btn">Disney+</button>
-                <button class="fav-btn">Prime</button>
-                <button class="fav-btn">HBO</button>
-                <button class="fav-btn">CNN</button>
-                <button class="fav-btn">ESPN</button>
-                <button class="fav-btn">BBC</button>
-                <button class="fav-btn">Sky News</button>
-                <button class="fav-btn">Al Jazeera</button>
-              </div>
-            </div>
-
-          </div>
+          </div><!-- /widget-tv-page1 -->
 
 
           <!-- ==================== SHADES WIDGET ====================
@@ -434,168 +296,245 @@
             • DRAG UP   / RIGHT past zone   → sends OPEN join
             • DRAG DOWN / LEFT  past zone   → sends CLOSE join
             • RELEASE                       → thumb springs back to centre
+
+            ▸▸▸ EDIT-FOR-PAGE-N: each shade card needs THREE things lined up:
+                a) data-shade="<key>" here in the HTML
+                b) SHADE_JOIN_PREFIX[<key>] map entry in page1.js
+                c) <PREFIX>_OPEN / _CLOSE / _STOP / _POS / _FB block
+                   in joins1.js → SHADES section.
             ════════════════════════════════════════════════════════════════
           -->
-          <div id="widget-shades" class="widget">
+          <div id="widget-shades-page1" class="widget">
 
             <div class="sec-hdr">
-              <span class="sec-title">Window Shades</span>
-              <span class="sec-badge" id="shadesOpenCount">0 open</span>
+              <span class="sec-title">Window Shutters</span>
+              <span class="sec-badge" id="shadesOpenCount-page1">0 open</span>
             </div>
 
             <div class="shades-grid">
 
-              <!-- ── SHADE 1 : LIVING ROOM ── vertical shutter ───── -->
-              <div class="shade-card"
-                   data-shade="livingroom"
-                   data-label="Living Room"
-                   data-icon="🪟"
-                   data-join-open="50"
-                   data-join-close="51"
-                   data-join-stop="52"
-                   data-join-fb="35"
-                   data-orientation="vertical">
-              </div>
-
-              <!-- ── SHADE 2 : BEDROOM ── vertical shutter ───────── -->
+              <!-- ── SHADE 1 : MASTER BEDROOM ── vertical shutter ─────
+                   joins (data-join-open/close/stop/pos/fb) injected at init
+                   from joins1.js → SHADES.Master_Bedroom_*.                -->
               <div class="shade-card"
                    data-shade="bedroom"
-                   data-label="Bedroom"
+                   data-label="Master Bedroom"
                    data-icon="🛏️"
-                   data-join-open="53"
-                   data-join-close="54"
-                   data-join-stop="55"
-                   data-join-pos="37"
-                   data-join-fb="38"
                    data-orientation="vertical">
               </div>
-
-              <!-- ── SHADE 3 : CURTAIN ── horizontal (drape) ─────── -->
-              <div class="shade-card"
-                   data-shade="curtain"
-                   data-label="Curtain"
-                   data-icon="🎭"
-                   data-join-open="56"
-                   data-join-close="57"
-                   data-join-stop="58"
-                   data-join-pos="39"
-                   data-join-fb="40"
-                   data-orientation="horizontal">
-              </div>
-
-              <!-- ── SHADE 4 : BALCONY ── vertical shutter ────────── -->
-              <div class="shade-card"
-                   data-shade="balcony"
-                   data-label="Balcony"
-                   data-icon="🌿"
-                   data-join-open="59"
-                   data-join-close="60"
-                   data-join-stop="61"
-                   data-join-pos="41"
-                   data-join-fb="42"
-                   data-orientation="vertical">
-              </div>
-
-            </div><!-- /.shades-grid -->
-
-          </div><!-- /#widget-shades -->
+              
+    
+          </div><!-- /.shades-grid -->
+          </div><!-- /#widget-shades-page1 -->
 
 
           <!-- ==================== AC WIDGET ==================== -->
-          <div id="widget-ac" class="widget">
+          <div id="widget-ac-page1" class="widget">
             <div class="sec-hdr">
-              <span class="sec-title">Air Conditioning</span>
-              <span class="sec-badge" id="acStatusBadge">Master Robe • ON</span>
+              <span class="sec-title">Climate Control</span>
+              <span class="sec-badge" id="acStatusBadge-page1">Master Robe • ON</span>
             </div>
 
-            <!-- AC Main Card -->
-            <div class="ac-card">
+            <!-- Sub-widget navigation -->
+            <div class="sub-tab-nav">
+              <button class="sub-tab-btn active" data-subwidget="ac-ac" onclick="switchACSubWidget_page1('ac-ac', this)">❄️ Air Conditioner</button>
+              <button class="sub-tab-btn"         data-subwidget="ac-heater" onclick="switchACSubWidget_page1('ac-heater', this)">🔥 Heater</button>
+            </div>
 
-              <!-- Top row: room info + power -->
-              <div class="ac-top-row">
-                <div class="ac-room-info">
-                  <div class="ac-room-icon">🏠</div>
-                  <div>
-                    <div class="ac-room-name">Master Robe</div>
-                    <div class="ac-room-sub">Air-conditioning</div>
+            <!-- ========== AC SUB-WIDGET ========== -->
+            <div id="ac-ac-page1" class="ac-subwidget active">
+              <div class="ac-card">
+
+                <!-- Top row -->
+                <div class="ac-top-row">
+                  <div class="ac-room-info">
+                    <div class="ac-room-icon">🏠</div>
+                    <div>
+                      <div class="ac-room-name">Master Robe</div>
+                      <div class="ac-room-sub">Air-conditioning</div>
+                    </div>
                   </div>
-                </div>
-                <button class="ac-power-btn" id="acPowerBtn" data-on="true" title="Power">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
-                    <line x1="12" y1="2" x2="12" y2="12"/>
-                  </svg>
-                </button>
-              </div>
-
-              <!-- Current temperature -->
-              <div class="ac-current-temp-row">
-                <span class="ac-current-label">Current Room Temperature (°C)</span>
-                <div class="ac-current-value" id="acCurrentTemp">29°</div>
-              </div>
-
-              <!-- Dial + buttons row -->
-              <div class="ac-dial-row">
-                <!-- Minus button -->
-                <button class="ac-adj-btn" id="acDecBtn">−</button>
-
-                <!-- SVG Arc Dial -->
-                <div class="ac-dial-wrap">
-                  <svg class="ac-dial-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                      <linearGradient id="arcGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stop-color="#22d3a5"/>
-                        <stop offset="100%" stop-color="#4f8ef7"/>
-                      </linearGradient>
-                    </defs>
-                    <!-- Background track -->
-                    <path id="acTrackBg" d="" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="10" stroke-linecap="round"/>
-                    <!-- Active arc -->
-                    <path id="acArcPath" d="" fill="none" stroke="url(#arcGrad)" stroke-width="10" stroke-linecap="round"/>
-                    <!-- Tick marks -->
-                    <g id="acTicks" opacity="0.3"></g>
-                    <!-- Center text -->
-                    <text x="110" y="104" text-anchor="middle" class="ac-dial-temp" id="acDialTemp">17°</text>
-                    <text x="110" y="130" text-anchor="middle" class="ac-dial-label">TARGET TEMP.</text>
-                  </svg>
+                  <button class="ac-power-btn" id="acPowerBtn-page1" data-on="true" title="Power">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+                      <line x1="12" y1="2" x2="12" y2="12"/>
+                    </svg>
+                  </button>
                 </div>
 
-                <!-- Plus button -->
-                <button class="ac-adj-btn" id="acIncBtn">+</button>
-              </div>
+                <!-- Current temperature -->
+                <div class="ac-current-temp-row">
+                  <span class="ac-current-label">Current Room Temperature (°C)</span>
+                  <div class="ac-current-value" id="acCurrentTemp-page1">29°</div>
+                </div>
 
-              <!-- Mode selector -->
-              <div class="ac-section-row">
-                <span class="ac-section-label">Mode</span>
-              </div>
-              <div class="ac-mode-row" id="acModeRow">
-                <button class="ac-mode-btn" data-mode="auto"  data-join="73">AUTO</button>
-                <button class="ac-mode-btn ac-mode-active" data-mode="cool"  data-join="71">COOL</button>
-                <button class="ac-mode-btn" data-mode="heat"  data-join="72">HEAT</button>
-                <button class="ac-mode-btn" data-mode="dry"   data-join="74">DRY</button>
-                <button class="ac-mode-btn" data-mode="fan"   data-join="75">FAN</button>
-              </div>
+                <!-- Dial row -->
+                <div class="ac-dial-row">
+                  <button class="ac-adj-btn" id="acDecBtn-page1">−</button>
+                  <div class="ac-dial-wrap">
+                    <svg class="ac-dial-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                        <linearGradient id="arcGradAC-page1" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stop-color="#22d3a5"/>
+                          <stop offset="100%" stop-color="#4f8ef7"/>
+                        </linearGradient>
+                      </defs>
+                      <path id="acTrackBg-page1" d="" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="10" stroke-linecap="round"/>
+                      <path id="acArcPath-page1" d="" fill="none" stroke="url(#arcGradAC-page1)" stroke-width="10" stroke-linecap="round"/>
+                      <g id="acTicks-page1" opacity="0.3"></g>
+                      <text x="110" y="104" text-anchor="middle" class="ac-dial-temp" id="acDialTemp-page1">17°</text>
+                      <text x="110" y="130" text-anchor="middle" class="ac-dial-label">TARGET TEMP.</text>
+                    </svg>
+                  </div>
+                  <button class="ac-adj-btn" id="acIncBtn-page1">+</button>
+                </div>
 
-              <!-- Fan speed selector -->
-              <div class="ac-section-row" style="margin-top:18px;">
-                <span class="ac-section-label">Fan Speed</span>
-              </div>
-              <div class="ac-fan-row" id="acFanRow">
-                <button class="ac-fan-btn" data-fan="auto" data-join="79">AUTO</button>
-                <button class="ac-fan-btn" data-fan="low"  data-join="76">LOW</button>
-                <button class="ac-fan-btn" data-fan="med"  data-join="77">MED</button>
-                <button class="ac-fan-btn ac-fan-active" data-fan="high" data-join="78">HIGH</button>
-              </div>
+                <!-- Mode -->
+                <div class="ac-section-row">
+                  <span class="ac-section-label">Mode</span>
+                </div>
+                <div class="ac-mode-row" id="acModeRow-page1">
+                  <button class="ac-mode-btn"            data-mode="auto"><span class="ac-mode-ico">♻️</span>Auto</button>
+                  <button class="ac-mode-btn ac-mode-active" data-mode="cool"><span class="ac-mode-ico">❄️</span>Cool</button>
+                  <button class="ac-mode-btn"            data-mode="heat"><span class="ac-mode-ico">🔥</span>Heat</button>
+                  <button class="ac-mode-btn"            data-mode="dry" ><span class="ac-mode-ico">💧</span>Dry</button>
+                  <button class="ac-mode-btn"            data-mode="fan" ><span class="ac-mode-ico">🌬️</span>Fan</button>
+                </div>
 
-            </div><!-- /.ac-card -->
+                <!-- Fan speed -->
+                <div class="ac-section-row">
+                  <span class="ac-section-label">Fan Speed</span>
+                </div>
+                <div class="ac-fan-row" id="acFanRow-page1">
+                  <button class="ac-fan-btn"            data-fan="auto"><span class="ac-fan-ico">♻️</span>Auto</button>
+                  <button class="ac-fan-btn"            data-fan="low" ><span class="ac-fan-ico">🥱</span>Low</button>
+                  <button class="ac-fan-btn"            data-fan="med" ><span class="ac-fan-ico">🏃</span>Med</button>
+                  <button class="ac-fan-btn ac-fan-active" data-fan="high"><span class="ac-fan-ico">🏎️</span>High</button>
+                </div>
+
+              </div><!-- /.ac-card -->
+            </div><!-- /#ac-ac -->
+
+            <!-- ========== HEATER SUB-WIDGET ========== -->
+            <div id="ac-heater-page1" class="ac-subwidget">
+              <div class="ac-card">
+
+                <!-- Top row -->
+                <div class="ac-top-row">
+                  <div class="ac-room-info">
+                    <div class="ac-room-icon">🔥</div>
+                    <div>
+                      <div class="ac-room-name">Master Robe</div>
+                      <div class="ac-room-sub">Radiant Heater</div>
+                    </div>
+                  </div>
+                  <button class="ac-power-btn" id="htrPowerBtn-page1" data-on="true" title="Power">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+                      <line x1="12" y1="2" x2="12" y2="12"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- Current temperature -->
+                <div class="ac-current-temp-row">
+                  <span class="ac-current-label">Current Room Temperature (°C)</span>
+                  <div class="ac-current-value" id="htrCurrentTemp-page1">21°</div>
+                </div>
+
+                <!-- Dial row -->
+                <div class="ac-dial-row">
+                  <button class="ac-adj-btn" id="htrDecBtn-page1">−</button>
+                  <div class="ac-dial-wrap">
+                    <svg class="ac-dial-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                        <linearGradient id="arcGradHTR-page1" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%"  stop-color="#ff8f3c"/>
+                          <stop offset="100%" stop-color="#ff5b3c"/>
+                        </linearGradient>
+                      </defs>
+                      <path id="htrTrackBg-page1" d="" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="10" stroke-linecap="round"/>
+                      <path id="htrArcPath-page1" d="" fill="none" stroke="url(#arcGradHTR-page1)" stroke-width="10" stroke-linecap="round"/>
+                      <g id="htrTicks-page1" opacity="0.3"></g>
+                      <text x="110" y="104" text-anchor="middle" class="ac-dial-temp" id="htrDialTemp-page1">22°</text>
+                      <text x="110" y="130" text-anchor="middle" class="ac-dial-label">TARGET TEMP.</text>
+                    </svg>
+                  </div>
+                  <button class="ac-adj-btn" id="htrIncBtn-page1">+</button>
+                </div>
+
+              </div><!-- /.ac-card -->
+            </div><!-- /#ac-heater -->
 
           </div><!-- /#widget-ac -->
 
-        </div>
-      </div>
-    </section>
-  </div>
 
+          <!-- ==================== MUSIC WIDGET ====================
+            Five buttons:
+              • Air Play   → centred, prominent  (#musicAirPlayBtn)
+              • Vol +      (#musicVolUpBtn)
+              • Vol −      (#musicVolDownBtn)
+              • Mute       (#musicMuteBtn)
+              • Power Off  (#musicPowerBtn)
+            All five pulse a digital join from joins1.js → MUSIC.* .
+          -->
+          <div id="widget-music-page1" class="widget">
+
+            <div class="sec-hdr">
+              <span class="sec-title">Music & Audio</span>
+              <span class="sec-badge" id="musicStatusBadge-page1">AirPlay Ready</span>
+            </div>
+
+            <div class="music-card">
+
+              <!-- ── Centred Air Play button ─────────────────────── -->
+              <button class="music-airplay-btn" id="musicAirPlayBtn-page1"
+                      type="button" aria-label="Air Play">
+                <span class="music-airplay-ico" aria-hidden="true">🎵</span>
+                <span class="music-airplay-lbl">Bedroom Air Play</span>
+              </button>
+
+              <!-- ── 4 control buttons (Vol+ / Vol− / Mute / Power) ── -->
+              <div class="music-controls-grid">
+                <button class="music-ctrl-btn music-volup"
+                        id="musicVolUpBtn-page1" type="button" aria-label="Volume up">
+                  <span class="music-ctrl-ico" aria-hidden="true">🔊</span>
+                  <span class="music-ctrl-lbl">Vol +</span>
+                </button>
+                <button class="music-ctrl-btn music-voldown"
+                        id="musicVolDownBtn-page1" type="button" aria-label="Volume down">
+                  <span class="music-ctrl-ico" aria-hidden="true">🔉</span>
+                  <span class="music-ctrl-lbl">Vol −</span>
+                </button>
+                <button class="music-ctrl-btn music-mute"
+                        id="musicMuteBtn-page1" type="button" aria-label="Mute">
+                  <span class="music-ctrl-ico" aria-hidden="true">🔇</span>
+                  <span class="music-ctrl-lbl">Mute</span>
+                </button>
+                <button class="music-ctrl-btn music-power"
+                        id="musicPowerBtn-page1" type="button" aria-label="Power off">
+                  <span class="music-ctrl-ico" aria-hidden="true">⏻</span>
+                  <span class="music-ctrl-lbl">Power Off</span>
+                </button>
+              </div>
+
+            </div><!-- /.music-card -->
+
+          </div><!-- /#widget-music -->
+
+        </div><!-- /#widgets-container -->
+      </div><!-- /.page-wrap -->
+    </section><!-- /#page1-page -->
+  </div><!-- /bg wrapper -->
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       JOIN MAP — load FIRST so window.J1 is defined before page1.js runs.
+       Edit joins1.js (NOT page1.js) to change any Crestron join number.
+
+       ▸▸▸ EDIT-FOR-PAGE-N: rename to joins<N>.js / page<N>.js for the
+       matching files of your new page.
+       ══════════════════════════════════════════════════════════════ -->
+  <script src="joins1.js"></script>
   <script src="page1.js"></script>
 </body>
 </html>
